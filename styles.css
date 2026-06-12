@@ -3897,9 +3897,12 @@ body {
     overflow: hidden;
     cursor: pointer;
     pointer-events: auto !important;
+
+
     display: flex;
   flex-direction: column;
   min-height: 320px;
+
 }
 .start-quiz-btn {
     pointer-events: auto !important;
@@ -3916,6 +3919,7 @@ body {
     height: 3px;
     background: var(--gradient-4);
 } */
+
  
 .quiz-card::before {
   content: "";
@@ -3926,6 +3930,7 @@ body {
   height: 3px;
   background: var(--gradient-4);
 }
+
 
 
 .quiz-card:hover {
@@ -3954,10 +3959,13 @@ body {
     line-height: 1.6;
     pointer-events: none;
 
+
+
   color: var(--text-secondary);
   font-size: 0.95rem;
   margin-bottom: 1rem;
   line-height: 1.6;
+
 
 }
 
@@ -5442,6 +5450,8 @@ body.light-mode {
 }
 .quiz-card * {
     position: relative;
+
+}
 }
 
 @media (max-width: 768px) {
@@ -5474,4 +5484,5 @@ body.light-mode {
     padding: 1.5rem;
   }
 }
+
 
