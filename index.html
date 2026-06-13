@@ -1320,7 +1320,41 @@
     <button id="backToTopBtn" class="back-to-top" aria-label="Back to Top">
       <i class="fas fa-arrow-up"></i>
     </button>
+
+    <!-- Auth Gate Modal -->
+    <div class="modal" id="authGateModal" role="dialog" aria-modal="true" aria-labelledby="authGateTitle">
+      <div class="modal-content auth-gate-modal-content">
+        <button class="modal-close" id="authGateModalClose" aria-label="Close">&times;</button>
+        <div class="auth-gate-icon">
+          <div class="auth-gate-lock-ring">
+            <i class="fas fa-lock"></i>
+          </div>
+        </div>
+        <h2 class="auth-gate-title" id="authGateTitle">Login Required</h2>
+        <p class="auth-gate-subtitle" id="authGateSubtitle">
+          Sign in to unlock this feature and track your progress.
+        </p>
+        <div class="auth-gate-perks">
+          <div class="auth-gate-perk"><i class="fas fa-chart-line"></i> Track your progress &amp; streaks</div>
+          <div class="auth-gate-perk"><i class="fas fa-trophy"></i> Earn XP &amp; unlock badges</div>
+          <div class="auth-gate-perk"><i class="fas fa-users"></i> Join the leaderboard</div>
+        </div>
+        <div class="auth-gate-actions">
+          <a href="/login" id="authGateLoginBtn" class="btn btn-primary auth-gate-btn">
+            <i class="fas fa-sign-in-alt"></i> Login
+          </a>
+          <a href="/signup" id="authGateSignupBtn" class="btn btn-secondary auth-gate-btn">
+            <i class="fas fa-user-plus"></i> Sign Up Free
+          </a>
+        </div>
+        <p class="auth-gate-dismiss">
+          <button class="auth-gate-dismiss-btn" id="authGateDismiss">Maybe later</button>
+        </p>
+      </div>
+    </div>
+
     <script src="auth.js"></script>
     <script src="script.js?v=20260601"></script>
+    <script src="auth-gate.js"></script>
   </body>
 </html>
