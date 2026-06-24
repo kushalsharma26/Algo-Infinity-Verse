@@ -504,7 +504,7 @@
 
     currentSession = await getSession();
 
-    if (window.__firebaseClient) {
+    if (!currentSession.authenticated && window.__firebaseClient) {
       try {
         let redirectResult = await window.__firebaseClient.getRedirectUser();
         let idToken = redirectResult?.idToken;
@@ -513,9 +513,9 @@
           const currentUser = window.__firebaseClient.getCurrentUser();
           if (currentUser) {
             try {
-              idToken = await currentUser.getIdToken();
+              idToken = await currentUser.getIdToken(true);
             } catch (tokenError) {
-              console.warn("Failed to get ID token from current user:", tokenError);
+              console.warn("Force refresh ID token failed:", tokenError);
             }
           }
         }

@@ -53,7 +53,13 @@ export async function getRedirectUser() {
       const idToken = await result.user.getIdToken();
       return { idToken, user: result.user };
     } catch (e) {
-      console.warn("getIdToken from redirect result failed:", e);
+      console.warn("getIdToken from redirect result failed, trying force refresh:", e);
+      try {
+        const idToken = await result.user.getIdToken(true);
+        return { idToken, user: result.user };
+      } catch (e2) {
+        console.warn("Force refresh ID token also failed:", e2);
+      }
     }
   }
 
@@ -66,10 +72,10 @@ export async function getRedirectUser() {
         resolved = true;
         unsubscribe();
         try {
-          const idToken = await user.getIdToken();
+          const idToken = await user.getIdToken(true);
           resolve({ idToken, user });
         } catch (tokenError) {
-          console.warn("getIdToken from onAuthStateChanged failed:", tokenError);
+          console.warn("Force refresh ID token from onAuthStateChanged failed:", tokenError);
           resolve(null);
         }
       }
