@@ -298,35 +298,121 @@ function getCodeFromEditor() {
 
 // Initialize executor
 function initExecutor() {
-    const code = getCodeFromEditor();
-    executor = new CodeExecutor(code);
-    executor.highlightLine(0);
-    return executor;
+    try {
+        const code = getCodeFromEditor();
+
+        executor = new CodeExecutor(code);
+        executor.highlightLine(0);
+
+        return executor;
+    } catch (error) {
+        console.error(error);
+
+        executor = null;
+
+        updateConsoleUI([
+            "Failed to initialize executor.",
+            error.message,
+        ]);
+
+        updateTraceUI([
+            {
+                line: 0,
+                message: `❌ ${error.message}`,
+                time: new Date().toISOString(),
+            },
+        ]);
+
+        const status = document.getElementById("statusText");
+        if (status) {
+            status.textContent = "❌ Executor initialization failed";
+        }
+
+        return null;
+    }
 }
 
 // ====== BUTTON HANDLERS ======
 
 // Run
 document.getElementById('runBtn').addEventListener('click', () => {
-    if (!executor) initExecutor();
-    executor.runAll();
-    updateConsoleUI(executor.output);
+    if (!executor) {
+        executor = initExecutor();
+    }
+
+    if (!executor) return;
+
+    try {
+        executor.runAll();
+        updateConsoleUI(executor.output);
+    } catch (error) {
+        console.error(error);
+
+        updateConsoleUI([
+            "Execution failed.",
+            error.message,
+        ]);
+
+        updateTraceUI([
+            {
+                line: executor?.currentLine ?? 0,
+                message: `❌ ${error.message}`,
+                time: new Date().toISOString(),
+            },
+        ]);
+    }
 });
 
 // Step
 document.getElementById('stepBtn').addEventListener('click', () => {
-    if (!executor) initExecutor();
+    if (!executor) {
+        executor = initExecutor();
+    }
+
+    if (!executor) return;
+
+    try {
     executor.stepForward();
     updateConsoleUI(executor.output);
     updateVariablesUI(executor.variables);
+    } catch (error) {
+        console.error(error);
+
+        updateConsoleUI([
+            "Execution failed.",
+            error.message,
+        ]);
+
+        updateTraceUI([
+            {
+                line: executor?.currentLine ?? 0,
+                message: `❌ ${error.message}`,
+                time: new Date().toISOString(),
+            },
+        ]);
+    }
 });
 
 // Reset
 document.getElementById('resetBtn').addEventListener('click', () => {
-    if (!executor) initExecutor();
+    if (!executor) {
+        executor = initExecutor();
+    }
+
+    if (!executor) return;
+
+    try {
     executor.reset();
     updateConsoleUI([]);
     updateVariablesUI({});
+    } catch (error) {
+        console.error(error);
+
+        updateConsoleUI([
+            "Reset failed.",
+            error.message,
+        ]);
+    }
 });
 
 // ====== DARK MODE TOGGLE ======
@@ -346,7 +432,11 @@ document.addEventListener('DOMContentLoaded', () => {
     updateLineNumbers();
     
     // Initialize executor
-    initExecutor();
+    executor = initExecutor();
+
+    if (!executor) {
+        return;
+    }
     
     // Show initial state
     updateVariablesUI({});
@@ -368,12 +458,29 @@ function updateLineNumbers() {
 // Re-initialize when code changes
 document.getElementById('codeEditor').addEventListener('input', () => {
     if (executor) {
-        executor.reset();
-        initExecutor();
-        updateVariablesUI({});
-        updateTraceUI([]);
-        updateConsoleUI([]);
+        try {
+            executor.reset();
+        } catch (error) {
+            console.error(error);
+
+            updateConsoleUI([
+                "Reset failed.",
+                error.message,
+            ]);
+        }
     }
+
+    executor = initExecutor();
+
+    if (!executor) return;
+
+    updateVariablesUI({});
+    updateTraceUI([]);
+    updateConsoleUI([]);
+
+    updateVariablesUI({});
+    updateTraceUI([]);
+    updateConsoleUI([]);
 });
 
 window.addEventListener("resize", () => {
