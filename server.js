@@ -20,9 +20,9 @@ import { generateSdlcAdvice } from "./sdlcAdvisor.js";
 import { handleReportRequest } from "./backend/reports/reportGenerator.js";
 import { getUserBenchmark } from "./backend/benchmarking/percentileService.js";
 import { Server as SocketIOServer } from "socket.io";
-import { 
-  ACCESS_TOKEN_MAX_AGE_SECONDS, getClientIdentifier, isSignupRateLimited, 
-  recordSignupAttempt, normalizeAuthDelay, createAccessToken, 
+import {
+  ACCESS_TOKEN_MAX_AGE_SECONDS, getClientIdentifier, isSignupRateLimited,
+  recordSignupAttempt, normalizeAuthDelay, createAccessToken,
   verifyAccessToken, hashPassword, passwordMatches, validateSignup,
   createRefreshToken, verifyRefreshToken, revokeTokenFamily,
   activeRefreshFamilies
@@ -46,6 +46,7 @@ import {
   getHistory,
 } from "./pages/Dsa-Battle/Battleservice.js";
 
+import { handler as favoritesHandler } from "./api/favorites.js";
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
@@ -58,7 +59,7 @@ const uploadCsv = multer({
 function validateMagicBytes(buffer, mimeType) {
   if (!buffer || buffer.length < 4) return false;
   const hex = buffer.slice(0, 4).toString("hex").toUpperCase();
-  
+
   if (mimeType === "application/pdf") {
     return hex === "25504446";
   }
@@ -290,7 +291,7 @@ async function updateMemoryStore(mutator) {
   });
 
   // Prevent one rejected task from permanently breaking the queue.
-  memoryWriteQueue = task.catch(() => {});
+  memoryWriteQueue = task.catch(() => { });
   return task;
 }
 
@@ -428,12 +429,9 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 500, { error: "Failed to log error" });
     }
   }
-  
+
   if (pathname === "/api/execute" && req.method === "POST") {
     try {
-     
-      const payload = await readJsonBody(req);
-      const { sourceCode, language, stdin } = payload;
       const session = getSession(req);
       if (!session) {
         return sendJson(res, 401, {
@@ -441,7 +439,7 @@ async function handleApi(req, res, pathname) {
           message: "Authentication required.",
         });
       }
-     
+
       let payload;
       try {
         payload = await readJsonBody(req);
@@ -452,6 +450,7 @@ async function handleApi(req, res, pathname) {
           message: tooLarge ? "Request body is too large." : "Invalid JSON body.",
         });
       }
+
       const sourceCode = payload.sourceCode ?? payload.source_code;
       const { language, stdin } = payload;
 
@@ -478,46 +477,46 @@ async function handleApi(req, res, pathname) {
       const targetLang = languageMap[language.toLowerCase()];
 
       if (!targetLang) {
-         return sendJson(res, 400, { success: false, message: 'Unsupported language.' });
+        return sendJson(res, 400, { success: false, message: 'Unsupported language.' });
       }
 
       // JDoodle API call
       const response = await fetch('https://api.jdoodle.com/v1/execute', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              clientId: process.env.JDOODLE_CLIENT_ID,
-              clientSecret: process.env.JDOODLE_CLIENT_SECRET,
-              script: sourceCode,
-              language: targetLang.lang,
-              versionIndex: targetLang.version,
-              stdin: stdin || ""
-          })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: process.env.JDOODLE_CLIENT_ID,
+          clientSecret: process.env.JDOODLE_CLIENT_SECRET,
+          script: sourceCode,
+          language: targetLang.lang,
+          versionIndex: targetLang.version,
+          stdin: stdin || ""
+        })
       });
 
       const data = await response.json();
 
       if (!response.ok || data.error) {
-          console.error("JDoodle API Error:", data);
-          return sendJson(res, 500, { 
-              success: false, 
-              message: 'Compiler API error', 
-              details: data 
-          });
+        console.error("JDoodle API Error:", data);
+        return sendJson(res, 500, {
+          success: false,
+          message: 'Compiler API error',
+          details: data
+        });
       }
 
-     
+
       return sendJson(res, 200, {
-          success: true,
-          data: {
-              output: data.output,
-              memory: data.memory,
-              cpuTime: data.cpuTime
-          }
+        success: true,
+        data: {
+          output: data.output,
+          memory: data.memory,
+          cpuTime: data.cpuTime
+        }
       });
     } catch (error) {
-        console.error('Server Execution Error:', error);
-        return sendJson(res, 500, { success: false, message: 'Internal server proxy error.' });
+      console.error('Server Execution Error:', error);
+      return sendJson(res, 500, { success: false, message: 'Internal server proxy error.' });
     }
   }
 
@@ -525,7 +524,7 @@ async function handleApi(req, res, pathname) {
     try {
       const urlParams = new URL(req.url, `http://${req.headers.host}`).searchParams;
       const teamId = urlParams.get("id");
-      
+
       if (!teamId) {
         return sendJson(res, 400, { error: "Missing team id." });
       }
@@ -580,7 +579,7 @@ async function handleApi(req, res, pathname) {
         try {
           updatedProfile = await updateTeamProfilesStore(store => {
             const currentProfile = store[teamId] || { version: 1 };
-            
+
             // OCC version check
             if (currentProfile.version !== version) {
               const conflictError = new Error("Conflict");
@@ -604,7 +603,7 @@ async function handleApi(req, res, pathname) {
           });
         } catch (error) {
           if (error.status === 409) {
-            return sendJson(res, 409, { 
+            return sendJson(res, 409, {
               error: "Conflict detected: The profile was updated by someone else.",
               currentVersion: error.currentVersion
             });
@@ -616,7 +615,7 @@ async function handleApi(req, res, pathname) {
         try {
           updatedProfile = await db.runTransaction(async (transaction) => {
             const doc = await transaction.get(docRef);
-            
+
             const currentVersion = doc.exists ? doc.data().version : 1;
 
             if (currentVersion !== version) {
@@ -640,7 +639,7 @@ async function handleApi(req, res, pathname) {
           });
         } catch (error) {
           if (error.status === 409) {
-            return sendJson(res, 409, { 
+            return sendJson(res, 409, {
               error: "Conflict detected: The profile was updated by someone else.",
               currentVersion: error.currentVersion
             });
@@ -661,7 +660,7 @@ async function handleApi(req, res, pathname) {
     req.method === "GET" &&
     process.env.NODE_ENV !== "production"
   ) {
-    const keys = ["FIREBASE_API_KEY","FIREBASE_AUTH_DOMAIN","FIREBASE_PROJECT_ID","FIREBASE_STORAGE_BUCKET","FIREBASE_MESSAGING_SENDER_ID","FIREBASE_APP_ID","FIREBASE_CLIENT_EMAIL","FIREBASE_PRIVATE_KEY","SESSION_SECRET"];
+    const keys = ["FIREBASE_API_KEY", "FIREBASE_AUTH_DOMAIN", "FIREBASE_PROJECT_ID", "FIREBASE_STORAGE_BUCKET", "FIREBASE_MESSAGING_SENDER_ID", "FIREBASE_APP_ID", "FIREBASE_CLIENT_EMAIL", "FIREBASE_PRIVATE_KEY", "SESSION_SECRET"];
     const vars = {};
     keys.forEach(k => {
       const v = process.env[k];
@@ -744,14 +743,14 @@ async function handleApi(req, res, pathname) {
     try {
       const payload = await readJsonBody(req);
       const { repoUrl } = payload;
-      
+
       if (!repoUrl || !repoUrl.includes("github.com")) {
         return sendJson(res, 400, { error: "Please provide a valid GitHub repository URL." });
       }
 
       const provider = VCSFactory.getProvider(repoUrl);
       const workflows = await provider.getNormalizedWorkflows();
-      
+
       if (workflows.length === 0) {
         return sendJson(res, 200, {
           score: 0,
@@ -816,12 +815,12 @@ async function handleApi(req, res, pathname) {
       uploadCsv(req, res, async (err) => {
         if (err) return sendJson(res, 500, { error: "Upload error." });
         if (!req.file) return sendJson(res, 400, { error: "No CSV file uploaded." });
-        
+
         try {
           const records = csvParse(req.file.buffer.toString('utf-8'), { columns: false, skip_empty_lines: true });
           // Extract repo URLs from the first column
           const repoUrls = records.map(row => row[0]).filter(url => url && url.includes("github.com"));
-          
+
           if (repoUrls.length === 0) {
             return sendJson(res, 400, { error: "No valid GitHub URLs found in the CSV." });
           }
@@ -867,7 +866,7 @@ async function handleApi(req, res, pathname) {
   if (pathname === "/api/refresh" && req.method === "POST") {
     const rToken = getRefreshToken(req);
     if (!rToken) return sendJson(res, 401, { error: "No refresh token" });
-    
+
     const decoded = verifyRefreshToken(rToken);
     if (!decoded) return sendJson(res, 401, { error: "Invalid or expired refresh token" }, { "Set-Cookie": clearAuthCookies() });
     revokeTokenFamily(decoded.familyId);
@@ -881,7 +880,7 @@ async function handleApi(req, res, pathname) {
         try {
           const snapshot = await db.collection("users").doc(decoded.sub).get();
           if (snapshot.exists) user = { ...snapshot.data(), id: snapshot.id };
-        } catch(e) {}
+        } catch (e) { }
       }
     } else {
       user = users.find(u => u.id === decoded.sub);
@@ -891,18 +890,18 @@ async function handleApi(req, res, pathname) {
 
     const accessToken = createAccessToken(user);
     const refreshToken = createRefreshToken(user, decoded.familyId);
-    
+
     return sendJson(res, 200, { success: true }, { "Set-Cookie": authCookies(accessToken, refreshToken, req) });
   }
 
-if (pathname === "/api/session" && req.method === "GET") {
+  if (pathname === "/api/session" && req.method === "GET") {
     const session = getSession(req);
-    
-    
+
+
     if (!session) {
       return sendJson(res, 200, { authenticated: false, user: null });
     }
-    
+
     if (!session) {
       return sendJson(res, 200, { authenticated: false, user: null });
     }
@@ -1128,206 +1127,206 @@ if (pathname === "/api/session" && req.method === "GET") {
       confirmPassword,
     } = await readJsonBody(req);
 
-  if (
-    !currentPassword ||
-    !newPassword ||
-    !confirmPassword
-  ) {
-    return sendJson(res, 400, {
-      error: "All fields are required.",
-    });
-  }
-
-  if (newPassword !== confirmPassword) {
-    return sendJson(res, 400, {
-      error: "Passwords do not match.",
-    });
-  }
-
-  if (newPassword.length < 8) {
-    return sendJson(res, 400, {
-      error:
-        "Password must be at least 8 characters.",
-    });
-  }
-
-  if (
-    !/[A-Z]/.test(newPassword) ||
-    !/[a-z]/.test(newPassword) ||
-    !/\d/.test(newPassword)
-  ) {
-    return sendJson(res, 400, {
-      error:
-        "Password must contain uppercase, lowercase and number.",
-    });
-  }
-
-  const users = await readUsers();
-
-  const user = users.find(
-    (u) => u.id === session.sub
-  );
-
-  if (!user) {
-    return sendJson(res, 404, {
-      error: "User not found.",
-    });
-  }
-
-  if (
-    !passwordMatches(
-      currentPassword,
-      user.password
-    )
-  ) {
-    return sendJson(res, 400, {
-      error: "Current password is incorrect.",
-    });
-  }
-
-  user.password = hashPassword(newPassword);
-
-  await writeUsers(users);
-
-  changePasswordLimiter.reset(getClientIdentifier(req));
-
-  return sendJson(
-    res,
-    200,
-    {
-      success: true,
-      message:
-        "Password updated successfully.",
-    },
-    {
-      "Set-Cookie": clearAuthCookies(),
+    if (
+      !currentPassword ||
+      !newPassword ||
+      !confirmPassword
+    ) {
+      return sendJson(res, 400, {
+        error: "All fields are required.",
+      });
     }
-  );
-}
 
-  if (pathname === "/api/deactivate-account" && req.method === "POST") {
-  const session = getSession(req);
+    if (newPassword !== confirmPassword) {
+      return sendJson(res, 400, {
+        error: "Passwords do not match.",
+      });
+    }
 
-  if (!session) {
-    return sendJson(res, 401, {
-      error: "Login required.",
-    });
-  }
+    if (newPassword.length < 8) {
+      return sendJson(res, 400, {
+        error:
+          "Password must be at least 8 characters.",
+      });
+    }
 
-  const users = await readUsers();
+    if (
+      !/[A-Z]/.test(newPassword) ||
+      !/[a-z]/.test(newPassword) ||
+      !/\d/.test(newPassword)
+    ) {
+      return sendJson(res, 400, {
+        error:
+          "Password must contain uppercase, lowercase and number.",
+      });
+    }
 
-  const user = users.find((u) => u.id === session.sub);
+    const users = await readUsers();
 
-  if (!user) {
-    return sendJson(res, 404, {
-      error: "User not found.",
-    });
-  }
-
-  user.isDeactivated = true;
-  user.deactivatedAt = new Date().toISOString();
-
-  await writeUsers(users);
-
-  return sendJson(
-    res,
-    200,
-    { success: true },
-    {
-      "Set-Cookie": clearAuthCookies(),
-    },
-  );
-}
-
-if (
-  pathname === "/api/delete-account" &&
-  req.method === "POST"
-) {
-  if (!applyRateLimit(req, res, deleteAccountLimiter, "Too many delete account attempts. Please try again later.")) {
-    return;
-  }
-  const session = getSession(req);
-
-  if (!session) {
-    return sendJson(res, 401, {
-      error: "Login required.",
-    });
-  }
-
-  const payload = await readJsonBody(req);
-
-  const password = String(
-    payload.password || ""
-  );
-
-  const users = await readUsers();
-
-  const userIndex = users.findIndex(
-    (u) => u.id === session.sub
-  );
-
-  if (userIndex === -1) {
-    return sendJson(res, 404, {
-      error: "User not found.",
-    });
-  }
-
-  const user = users[userIndex];
-
-  if (
-    !passwordMatches(
-      password,
-      user.password
-    )
-  ) {
-    return sendJson(res, 401, {
-      error: "Incorrect password.",
-    });
-  }
-
-  // Log deletion event
-  const deletionEvent = {
-    userId: user.id,
-    email: user.email,
-    deletedAt: new Date().toISOString(),
-  };
-
-  let logs = [];
-
-  try {
-    const raw = await fs.readFile(
-      DELETION_LOG_FILE,
-      "utf8"
+    const user = users.find(
+      (u) => u.id === session.sub
     );
 
-    logs = JSON.parse(raw || "[]");
-  } catch {}
-
-  logs.push(deletionEvent);
-
-  await fs.writeFile(
-    DELETION_LOG_FILE,
-    JSON.stringify(logs, null, 2)
-  );
-
-  // Remove user
-  users.splice(userIndex, 1);
-
-  await writeUsers(users);
-
-  return sendJson(
-    res,
-    200,
-    {
-      success: true,
-    },
-    {
-      "Set-Cookie":
-        clearAuthCookies(),
+    if (!user) {
+      return sendJson(res, 404, {
+        error: "User not found.",
+      });
     }
-  );
-}
-if (pathname === "/api/forgot-password" && req.method === "POST") {
+
+    if (
+      !passwordMatches(
+        currentPassword,
+        user.password
+      )
+    ) {
+      return sendJson(res, 400, {
+        error: "Current password is incorrect.",
+      });
+    }
+
+    user.password = hashPassword(newPassword);
+
+    await writeUsers(users);
+
+    changePasswordLimiter.reset(getClientIdentifier(req));
+
+    return sendJson(
+      res,
+      200,
+      {
+        success: true,
+        message:
+          "Password updated successfully.",
+      },
+      {
+        "Set-Cookie": clearAuthCookies(),
+      }
+    );
+  }
+
+  if (pathname === "/api/deactivate-account" && req.method === "POST") {
+    const session = getSession(req);
+
+    if (!session) {
+      return sendJson(res, 401, {
+        error: "Login required.",
+      });
+    }
+
+    const users = await readUsers();
+
+    const user = users.find((u) => u.id === session.sub);
+
+    if (!user) {
+      return sendJson(res, 404, {
+        error: "User not found.",
+      });
+    }
+
+    user.isDeactivated = true;
+    user.deactivatedAt = new Date().toISOString();
+
+    await writeUsers(users);
+
+    return sendJson(
+      res,
+      200,
+      { success: true },
+      {
+        "Set-Cookie": clearAuthCookies(),
+      },
+    );
+  }
+
+  if (
+    pathname === "/api/delete-account" &&
+    req.method === "POST"
+  ) {
+    if (!applyRateLimit(req, res, deleteAccountLimiter, "Too many delete account attempts. Please try again later.")) {
+      return;
+    }
+    const session = getSession(req);
+
+    if (!session) {
+      return sendJson(res, 401, {
+        error: "Login required.",
+      });
+    }
+
+    const payload = await readJsonBody(req);
+
+    const password = String(
+      payload.password || ""
+    );
+
+    const users = await readUsers();
+
+    const userIndex = users.findIndex(
+      (u) => u.id === session.sub
+    );
+
+    if (userIndex === -1) {
+      return sendJson(res, 404, {
+        error: "User not found.",
+      });
+    }
+
+    const user = users[userIndex];
+
+    if (
+      !passwordMatches(
+        password,
+        user.password
+      )
+    ) {
+      return sendJson(res, 401, {
+        error: "Incorrect password.",
+      });
+    }
+
+    // Log deletion event
+    const deletionEvent = {
+      userId: user.id,
+      email: user.email,
+      deletedAt: new Date().toISOString(),
+    };
+
+    let logs = [];
+
+    try {
+      const raw = await fs.readFile(
+        DELETION_LOG_FILE,
+        "utf8"
+      );
+
+      logs = JSON.parse(raw || "[]");
+    } catch { }
+
+    logs.push(deletionEvent);
+
+    await fs.writeFile(
+      DELETION_LOG_FILE,
+      JSON.stringify(logs, null, 2)
+    );
+
+    // Remove user
+    users.splice(userIndex, 1);
+
+    await writeUsers(users);
+
+    return sendJson(
+      res,
+      200,
+      {
+        success: true,
+      },
+      {
+        "Set-Cookie":
+          clearAuthCookies(),
+      }
+    );
+  }
+  if (pathname === "/api/forgot-password" && req.method === "POST") {
     if (!applyRateLimit(req, res, forgotPasswordLimiter, "Too many forgot password attempts. Please try again later.")) {
       return;
     }
@@ -1462,846 +1461,846 @@ if (pathname === "/api/forgot-password" && req.method === "POST") {
       }
 
       if (pathname === "/api/feedback" && req.method === "POST") {
-    const session = getSession(req);
-    let payload;
-    try {
-      payload = await readJsonBody(req);
-    } catch (err) {
-      return sendJson(res, 400, { error: "Invalid JSON body." });
-    }
-
-    const { feedbackType, subject, message } = payload;
-    if (!feedbackType || !subject || !message) {
-      return sendJson(res, 400, {
-        error: "Feedback type, subject, and message are required.",
-      });
-    }
-
-    const allowedTypes = [
-      "Suggestion",
-      "Bug Report",
-      "Feature Request",
-      "General Feedback",
-    ];
-    if (!allowedTypes.includes(feedbackType)) {
-      return sendJson(res, 400, { error: "Invalid feedback type." });
-    }
-
-    if (subject.trim().length < 3) {
-      return sendJson(res, 400, {
-        error: "Subject must be at least 3 characters long.",
-      });
-    }
-
-    if (message.trim().length < 10) {
-      return sendJson(res, 400, {
-        error: "Message must be at least 10 characters long.",
-      });
-    }
-
-    const feedbackData = {
-      userId: session ? session.sub : null,
-      userName: session ? session.name : null,
-      userEmail: session ? session.email : null,
-      feedbackType,
-      subject: subject.trim(),
-      message: message.trim(),
-      status: "new",
-      createdAt: new Date().toISOString(),
-    };
-
-    try {
-      if (useFirestore) {
-        const docRef = await db.collection("feedback").add(feedbackData);
-        feedbackData.id = docRef.id;
-      } else {
-        const feedbackFile = path.join(DATA_DIR, "feedback.json");
-        await fs.mkdir(DATA_DIR, { recursive: true });
-        let feedbackList = [];
+        const session = getSession(req);
+        let payload;
         try {
-          const raw = await fs.readFile(feedbackFile, "utf8");
-          feedbackList = JSON.parse(raw || "[]");
+          payload = await readJsonBody(req);
         } catch (err) {
-          if (err.code !== "ENOENT") throw err;
+          return sendJson(res, 400, { error: "Invalid JSON body." });
         }
-        feedbackData.id = crypto.randomUUID();
-        feedbackList.push(feedbackData);
-        await fs.writeFile(
-          feedbackFile,
-          JSON.stringify(feedbackList, null, 2) + "\n",
-        );
+
+        const { feedbackType, subject, message } = payload;
+        if (!feedbackType || !subject || !message) {
+          return sendJson(res, 400, {
+            error: "Feedback type, subject, and message are required.",
+          });
+        }
+
+        const allowedTypes = [
+          "Suggestion",
+          "Bug Report",
+          "Feature Request",
+          "General Feedback",
+        ];
+        if (!allowedTypes.includes(feedbackType)) {
+          return sendJson(res, 400, { error: "Invalid feedback type." });
+        }
+
+        if (subject.trim().length < 3) {
+          return sendJson(res, 400, {
+            error: "Subject must be at least 3 characters long.",
+          });
+        }
+
+        if (message.trim().length < 10) {
+          return sendJson(res, 400, {
+            error: "Message must be at least 10 characters long.",
+          });
+        }
+
+        const feedbackData = {
+          userId: session ? session.sub : null,
+          userName: session ? session.name : null,
+          userEmail: session ? session.email : null,
+          feedbackType,
+          subject: subject.trim(),
+          message: message.trim(),
+          status: "new",
+          createdAt: new Date().toISOString(),
+        };
+
+        try {
+          if (useFirestore) {
+            const docRef = await db.collection("feedback").add(feedbackData);
+            feedbackData.id = docRef.id;
+          } else {
+            const feedbackFile = path.join(DATA_DIR, "feedback.json");
+            await fs.mkdir(DATA_DIR, { recursive: true });
+            let feedbackList = [];
+            try {
+              const raw = await fs.readFile(feedbackFile, "utf8");
+              feedbackList = JSON.parse(raw || "[]");
+            } catch (err) {
+              if (err.code !== "ENOENT") throw err;
+            }
+            feedbackData.id = crypto.randomUUID();
+            feedbackList.push(feedbackData);
+            await fs.writeFile(
+              feedbackFile,
+              JSON.stringify(feedbackList, null, 2) + "\n",
+            );
+          }
+
+          return sendJson(res, 201, { success: true, feedback: feedbackData });
+        } catch (err) {
+          console.error("Error saving feedback:", err);
+          return sendJson(res, 500, { error: "Failed to save feedback." });
+        }
       }
 
-      return sendJson(res, 201, { success: true, feedback: feedbackData });
-    } catch (err) {
-      console.error("Error saving feedback:", err);
-      return sendJson(res, 500, { error: "Failed to save feedback." });
-    }
-  }
+      if (pathname === "/api/user/profile" && req.method === "GET") {
+        const session = getSession(req);
 
-  if (pathname === "/api/user/profile" && req.method === "GET") {
-    const session = getSession(req);
-    
-    const userData = {
-        user: {
+        const userData = {
+          user: {
             name: session?.name || 'John Doe',
             username: session?.email?.split('@')[0] || 'johndoe',
             avatar: '🚀',
             bio: 'Passionate about DSA and building cool stuff!',
             joinedDate: '2024-01-15'
-        },
-        stats: {
+          },
+          stats: {
             totalSolved: 45,
             xp: 2800,
             streak: 7,
             level: 4
-        },
-        badges: ['🌟 First Steps', '🔥 On Fire', '💎 Diamond'],
-        languages: [
+          },
+          badges: ['🌟 First Steps', '🔥 On Fire', '💎 Diamond'],
+          languages: [
             { name: 'JavaScript', percentage: 80 },
             { name: 'Python', percentage: 65 },
             { name: 'Java', percentage: 50 },
             { name: 'C++', percentage: 40 }
-        ],
-        projects: [
+          ],
+          projects: [
             { name: 'Weather App', description: 'Real-time weather app', link: '#' },
             { name: 'Task Manager', description: 'Manage tasks easily', link: '#' }
-        ],
-        recentActivity: [
+          ],
+          recentActivity: [
             { action: 'Solved Two Sum', date: '2026-06-26' },
             { action: 'Completed Arrays Quiz', date: '2026-06-25' },
             { action: 'Earned Diamond Badge', date: '2026-06-24' }
-        ]
-    };
-    
-    return sendJson(res, 200, { success: true, data: userData });
-  }
+          ]
+        };
 
-  if (pathname === "/api/interview-experiences" && req.method === "POST") {
-    const session = getSession(req);
-    let payload;
-    try {
-      payload = await readJsonBody(req);
-    } catch {
-      return sendJson(res, 400, { error: "Invalid JSON body." });
-    }
+        return sendJson(res, 200, { success: true, data: userData });
+      }
 
-    const {
-      company,
-      role,
-      difficulty,
-      rating,
-      title,
-      content,
-      topics,
-      rounds,
-      offerStatus,
-    } = payload;
-    if (!company || !role || !difficulty || !rating || !title || !content) {
-      return sendJson(res, 400, {
-        error:
-          "Company, role, difficulty, rating, title, and content are required.",
-      });
-    }
-
-    const experienceData = {
-      id: crypto.randomUUID(),
-      userId: session ? session.sub : null,
-      userName: session ? session.name : null,
-      company: company.trim(),
-      role: role.trim(),
-      difficulty,
-      rating,
-      title: title.trim(),
-      content: content.trim(),
-      topics: Array.isArray(topics) ? topics : [],
-      rounds: rounds || null,
-      offerStatus: offerStatus || null,
-      upvotes: 0,
-      createdAt: new Date().toISOString(),
-    };
-
-    try {
-      if (useFirestore) {
-        const docRef = await db
-          .collection("interviewExperiences")
-          .add(experienceData);
-        experienceData.id = docRef.id;
-      } else {
-        const filePath = path.join(DATA_DIR, "interview-experiences.json");
-        await fs.mkdir(DATA_DIR, { recursive: true });
-        let list = [];
+      if (pathname === "/api/interview-experiences" && req.method === "POST") {
+        const session = getSession(req);
+        let payload;
         try {
-          const raw = await fs.readFile(filePath, "utf8");
-          list = JSON.parse(raw || "[]");
+          payload = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Invalid JSON body." });
+        }
+
+        const {
+          company,
+          role,
+          difficulty,
+          rating,
+          title,
+          content,
+          topics,
+          rounds,
+          offerStatus,
+        } = payload;
+        if (!company || !role || !difficulty || !rating || !title || !content) {
+          return sendJson(res, 400, {
+            error:
+              "Company, role, difficulty, rating, title, and content are required.",
+          });
+        }
+
+        const experienceData = {
+          id: crypto.randomUUID(),
+          userId: session ? session.sub : null,
+          userName: session ? session.name : null,
+          company: company.trim(),
+          role: role.trim(),
+          difficulty,
+          rating,
+          title: title.trim(),
+          content: content.trim(),
+          topics: Array.isArray(topics) ? topics : [],
+          rounds: rounds || null,
+          offerStatus: offerStatus || null,
+          upvotes: 0,
+          createdAt: new Date().toISOString(),
+        };
+
+        try {
+          if (useFirestore) {
+            const docRef = await db
+              .collection("interviewExperiences")
+              .add(experienceData);
+            experienceData.id = docRef.id;
+          } else {
+            const filePath = path.join(DATA_DIR, "interview-experiences.json");
+            await fs.mkdir(DATA_DIR, { recursive: true });
+            let list = [];
+            try {
+              const raw = await fs.readFile(filePath, "utf8");
+              list = JSON.parse(raw || "[]");
+            } catch (err) {
+              if (err.code !== "ENOENT") throw err;
+            }
+            list.push(experienceData);
+            await fs.writeFile(filePath, JSON.stringify(list, null, 2) + "\n");
+          }
+          return sendJson(res, 201, { success: true, experience: experienceData });
         } catch (err) {
-          if (err.code !== "ENOENT") throw err;
+          console.error("Error saving interview experience:", err);
+          return sendJson(res, 500, {
+            error: "Failed to save interview experience.",
+          });
         }
-        list.push(experienceData);
-        await fs.writeFile(filePath, JSON.stringify(list, null, 2) + "\n");
-      }
-      return sendJson(res, 201, { success: true, experience: experienceData });
-    } catch (err) {
-      console.error("Error saving interview experience:", err);
-      return sendJson(res, 500, {
-        error: "Failed to save interview experience.",
-      });
-    }
-  }
-
-  if (pathname === "/api/audit/history" && req.method === "POST") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
-
-    try {
-      const payload = await readJsonBody(req);
-      const auditData = {
-        auditId: crypto.randomUUID(),
-        userId: session.sub,
-        repoUrl: payload.repoUrl || "unknown",
-        timestamp: new Date().toISOString(),
-        overallScore: Number(payload.overallScore) || 0,
-        categoryScores: payload.categoryScores || {},
-        issuesCount: Number(payload.issuesCount) || 0,
-        recommendations: payload.recommendations || []
-      };
-
-      if (useFirestore) {
-        await db.collection(COLLECTIONS.AUDITS_HISTORY).doc(auditData.auditId).set(auditData);
-      } else {
-        const audits = await readAudits();
-        audits.push(auditData);
-        await writeAudits(audits);
       }
 
-      return sendJson(res, 201, { success: true, auditId: auditData.auditId });
-    } catch (err) {
-      console.error("Error saving audit history:", err);
-      return sendJson(res, 500, { error: "Failed to save audit history." });
-    }
-  }
+      if (pathname === "/api/audit/history" && req.method === "POST") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
 
-  if (pathname === "/api/audit/history" && req.method === "GET") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
+        try {
+          const payload = await readJsonBody(req);
+          const auditData = {
+            auditId: crypto.randomUUID(),
+            userId: session.sub,
+            repoUrl: payload.repoUrl || "unknown",
+            timestamp: new Date().toISOString(),
+            overallScore: Number(payload.overallScore) || 0,
+            categoryScores: payload.categoryScores || {},
+            issuesCount: Number(payload.issuesCount) || 0,
+            recommendations: payload.recommendations || []
+          };
 
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const repoUrl = url.searchParams.get("repoUrl");
-    const limit = Number(url.searchParams.get("limit")) || 20;
+          if (useFirestore) {
+            await db.collection(COLLECTIONS.AUDITS_HISTORY).doc(auditData.auditId).set(auditData);
+          } else {
+            const audits = await readAudits();
+            audits.push(auditData);
+            await writeAudits(audits);
+          }
 
-    try {
-      let history = [];
-      if (useFirestore) {
-        let query = db.collection(COLLECTIONS.AUDITS_HISTORY)
-          .where("userId", "==", session.sub);
-        
-        if (repoUrl) {
-          query = query.where("repoUrl", "==", repoUrl);
+          return sendJson(res, 201, { success: true, auditId: auditData.auditId });
+        } catch (err) {
+          console.error("Error saving audit history:", err);
+          return sendJson(res, 500, { error: "Failed to save audit history." });
         }
-        
-        const snapshot = await query.orderBy("timestamp", "desc").limit(limit).get();
-        history = snapshot.docs.map(doc => doc.data());
-      } else {
-        const allAudits = await readAudits();
-        history = allAudits.filter(a => a.userId === session.sub);
-        if (repoUrl) {
-          history = history.filter(a => a.repoUrl === repoUrl);
+      }
+
+      if (pathname === "/api/audit/history" && req.method === "GET") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
+
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const repoUrl = url.searchParams.get("repoUrl");
+        const limit = Number(url.searchParams.get("limit")) || 20;
+
+        try {
+          let history = [];
+          if (useFirestore) {
+            let query = db.collection(COLLECTIONS.AUDITS_HISTORY)
+              .where("userId", "==", session.sub);
+
+            if (repoUrl) {
+              query = query.where("repoUrl", "==", repoUrl);
+            }
+
+            const snapshot = await query.orderBy("timestamp", "desc").limit(limit).get();
+            history = snapshot.docs.map(doc => doc.data());
+          } else {
+            const allAudits = await readAudits();
+            history = allAudits.filter(a => a.userId === session.sub);
+            if (repoUrl) {
+              history = history.filter(a => a.repoUrl === repoUrl);
+            }
+            history.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            history = history.slice(0, limit);
+          }
+
+          return sendJson(res, 200, history);
+        } catch (err) {
+          console.error("Error fetching audit history:", err);
+          return sendJson(res, 500, { error: "Failed to fetch audit history." });
         }
-        history.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        history = history.slice(0, limit);
       }
 
-      return sendJson(res, 200, history);
-    } catch (err) {
-      console.error("Error fetching audit history:", err);
-      return sendJson(res, 500, { error: "Failed to fetch audit history." });
-    }
-  }
+      if (pathname === "/api/audit/trends" && req.method === "GET") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
 
-  if (pathname === "/api/audit/trends" && req.method === "GET") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const repoUrl = url.searchParams.get("repoUrl");
 
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const repoUrl = url.searchParams.get("repoUrl");
+        try {
+          let history = [];
+          if (useFirestore) {
+            let query = db.collection(COLLECTIONS.AUDITS_HISTORY)
+              .where("userId", "==", session.sub);
+            if (repoUrl) query = query.where("repoUrl", "==", repoUrl);
+            const snapshot = await query.orderBy("timestamp", "asc").get();
+            history = snapshot.docs.map(doc => doc.data());
+          } else {
+            const allAudits = await readAudits();
+            history = allAudits.filter(a => a.userId === session.sub);
+            if (repoUrl) history = history.filter(a => a.repoUrl === repoUrl);
+            history.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+          }
 
-    try {
-      let history = [];
-      if (useFirestore) {
-        let query = db.collection(COLLECTIONS.AUDITS_HISTORY)
-          .where("userId", "==", session.sub);
-        if (repoUrl) query = query.where("repoUrl", "==", repoUrl);
-        const snapshot = await query.orderBy("timestamp", "asc").get();
-        history = snapshot.docs.map(doc => doc.data());
-      } else {
-        const allAudits = await readAudits();
-        history = allAudits.filter(a => a.userId === session.sub);
-        if (repoUrl) history = history.filter(a => a.repoUrl === repoUrl);
-        history.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-      }
+          const trends = history.map(a => ({
+            timestamp: a.timestamp,
+            overallScore: a.overallScore
+          }));
 
-      const trends = history.map(a => ({
-        timestamp: a.timestamp,
-        overallScore: a.overallScore
-      }));
-
-      return sendJson(res, 200, trends);
-    } catch (err) {
-      console.error("Error fetching audit trends:", err);
-      return sendJson(res, 500, { error: "Failed to fetch audit trends." });
-    }
-  }
-
-  if (pathname === "/api/memory/log" && req.method === "POST") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
-
-    let payload;
-    try {
-      payload = await readJsonBody(req);
-    } catch {
-      return sendJson(res, 400, { error: "Invalid JSON body." });
-    }
-
-    const { topic, quality } = payload;
-    if (!topic || typeof topic !== "string" || topic.trim().length < 1) {
-      return sendJson(res, 400, { error: "Topic is required." });
-    }
-    if (
-      quality === undefined ||
-      isNaN(Number(quality)) ||
-      Number(quality) < 0 ||
-      Number(quality) > 5
-    ) {
-      return sendJson(res, 400, {
-        error: "Quality must be a number between 0 and 5.",
-      });
-    }
-
-    const trimmedTopic = topic.trim();
-    const updatedCard = await updateMemoryStore((store) => {
-      const userCards = store[session.sub] || {};
-      const existing = userCards[trimmedTopic] || { topic: trimmedTopic };
-      const updated = applySM2(existing, quality);
-      userCards[trimmedTopic] = updated;
-      store[session.sub] = userCards;
-      return updated;
-    });
-
-    return sendJson(res, 200, { success: true, card: updatedCard });
-  }
-
-  if (pathname === "/api/memory/due" && req.method === "GET") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
-
-    const store = await readMemoryStore();
-    const userCards = store[session.sub] || {};
-    const now = new Date();
-    const due = Object.values(userCards).filter(
-      (card) => new Date(card.nextReviewDate) <= now,
-    );
-
-    return sendJson(res, 200, { success: true, due });
-  }
-
-  if (pathname === "/api/memory/all" && req.method === "GET") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
-
-    const store = await readMemoryStore();
-    const userCards = store[session.sub] || {};
-
-    return sendJson(res, 200, {
-      success: true,
-      cards: Object.values(userCards),
-    });
-  }
-
-  // ── Quiz Results (Firestore) ──────────────────────────────────────────────
-  if (pathname === "/api/quiz-results" && req.method === "POST") {
-    const session = getSession(req);
-    if (!session)
-      return sendJson(res, 401, { error: "Authentication required." });
-    if (!useFirestore)
-      return sendJson(res, 503, { error: "User store unavailable." });
-
-    let payload;
-    try {
-      payload = await readJsonBody(req);
-    } catch {
-      return sendJson(res, 400, { error: "Invalid JSON body." });
-    }
-
-    const {
-      quizId,
-      quizTitle,
-      score,
-      totalQuestions,
-      correctAnswers,
-      percentage,
-      topic,
-    } = payload;
-    if (
-      !quizId ||
-      !quizTitle ||
-      score === undefined ||
-      !totalQuestions ||
-      correctAnswers === undefined ||
-      percentage === undefined ||
-      !topic
-    ) {
-      return sendJson(res, 400, {
-        error:
-          "Missing required fields: quizId, quizTitle, score, totalQuestions, correctAnswers, percentage, topic.",
-      });
-    }
-
-    if (typeof score !== "number" || score < 0)
-      return sendJson(res, 400, {
-        error: "score must be a non-negative number.",
-      });
-    if (typeof totalQuestions !== "number" || totalQuestions < 1)
-      return sendJson(res, 400, { error: "totalQuestions must be >= 1." });
-    if (typeof correctAnswers !== "number" || correctAnswers < 0)
-      return sendJson(res, 400, { error: "correctAnswers must be >= 0." });
-    if (correctAnswers > totalQuestions)
-      return sendJson(res, 400, {
-        error: "correctAnswers cannot exceed totalQuestions.",
-      });
-    if (typeof percentage !== "number" || percentage < 0 || percentage > 100)
-      return sendJson(res, 400, { error: "percentage must be 0-100." });
-
-    try {
-      const attemptId = crypto.randomUUID();
-      const attempt = {
-        quizId: String(quizId),
-        quizTitle: String(quizTitle),
-        score: Number(score),
-        totalQuestions: Number(totalQuestions),
-        correctAnswers: Number(correctAnswers),
-        percentage: Number(percentage),
-        topic: String(topic),
-        completedAt: new Date().toISOString(),
-      };
-
-      await db
-        .collection("users")
-        .doc(session.sub)
-        .collection("quizResults")
-        .doc(attemptId)
-        .set(attempt);
-
-      return sendJson(res, 201, { success: true, attemptId, attempt });
-    } catch (error) {
-      console.error("Failed to save quiz result:", error);
-      return sendJson(res, 500, { error: "Failed to save quiz result." });
-    }
-  }
-
-  if (pathname === "/api/quiz-results" && req.method === "GET") {
-    const session = getSession(req);
-    if (!session)
-      return sendJson(res, 401, { error: "Authentication required." });
-    if (!useFirestore)
-      return sendJson(res, 503, { error: "User store unavailable." });
-
-    try {
-      const url = new URL(req.url, `http://${req.headers.host}`);
-      const parsedLimit = parseInt(url.searchParams.get("limit") || "20", 10);
-      const limit = Math.min(Number.isNaN(parsedLimit) ? 20 : parsedLimit, 100);
-      const topic = url.searchParams.get("topic");
-
-      let query = db
-        .collection("users")
-        .doc(session.sub)
-        .collection("quizResults")
-        .orderBy("completedAt", "desc")
-        .limit(limit);
-
-      if (topic) {
-        query = query.where("topic", "==", topic);
-      }
-
-      const snapshot = await query.get();
-      const results = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-
-      return sendJson(res, 200, {
-        success: true,
-        results,
-        count: results.length,
-      });
-    } catch (error) {
-      console.error("Failed to fetch quiz results:", error);
-      return sendJson(res, 500, { error: "Failed to fetch quiz results." });
-    }
-  }
-
-  if (pathname === "/api/reports/export/pdf" || pathname === "/api/reports/export/image") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Authentication required." });
-    return await handleReportRequest(req, res, pathname, session);
-  }
-
-  if (pathname === "/api/user/benchmark" && req.method === "GET") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Authentication required." });
-    
-    try {
-        const benchmark = await getUserBenchmark(session.sub);
-        return sendJson(res, 200, { success: true, benchmark });
-    } catch (err) {
-        console.error("Benchmark error:", err);
-        return sendJson(res, 500, { error: "Failed to generate benchmark." });
-    }
-  }
-
-  // ── Battle routes ──────────────────────────────────────────────────────────
-  // All battle routes require Firestore. If useFirestore is false (local dev
-  // with no Firebase env vars), we return 503 rather than crashing.
-  // All routes require an active session — unauthenticated requests get 401.
- 
-  if (pathname === "/api/battles" && req.method === "POST") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
-    if (!useFirestore) return sendJson(res, 503, { error: "Battle mode requires Firestore." });
- 
-    try {
-      const { opponentEmail, difficulty } = await readJsonBody(req);
-      if (!opponentEmail?.trim()) {
-        return sendJson(res, 400, { error: "opponentEmail is required." });
-      }
-      if (!["Easy", "Medium", "Hard"].includes(difficulty)) {
-        return sendJson(res, 400, { error: "difficulty must be Easy, Medium, or Hard." });
-      }
-      const battleId = await createBattle(session.sub, opponentEmail.trim(), difficulty);
-      return sendJson(res, 201, { battleId });
-    } catch (err) {
-      return sendJson(res, 400, { error: err.message });
-    }
-  }
- 
-  // GET /api/battles/history  — must be declared BEFORE the :id pattern below
-  // or "history" gets captured as a battle ID.
-  if (pathname === "/api/battles/history" && req.method === "GET") {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
-    if (!useFirestore) return sendJson(res, 503, { error: "Battle mode requires Firestore." });
- 
-    try {
-      const params = new URL(req.url, `http://${req.headers.host}`).searchParams;
-      const limit      = Math.min(parseInt(params.get("limit") || "20", 10), 50);
-      const startAfter = params.get("cursor") || null;
-      const history = await getHistory(session.sub, limit, startAfter);
-      return sendJson(res, 200, {
-        history,
-        nextCursor: history.length === limit ? history[history.length - 1].id : null,
-      });
-    } catch (err) {
-      return sendJson(res, 400, { error: err.message });
-    }
-  }
- 
-  // Dynamic battle routes: /api/battles/:id and /api/battles/:id/(join|submit|result)
-  const battleMatch = pathname.match(
-    /^\/api\/battles\/([^/]+?)(?:\/(join|submit|result))?$/
-  );
- 
-  if (battleMatch) {
-    const session = getSession(req);
-    if (!session) return sendJson(res, 401, { error: "Login required." });
-    if (!useFirestore) return sendJson(res, 503, { error: "Battle mode requires Firestore." });
- 
-    const [, battleId, action] = battleMatch;
- 
-    // GET /api/battles/:id — poll endpoint, returns state + timeRemainingMs
-    if (!action && req.method === "GET") {
-      try {
-        const battle = await getBattle(battleId);
-        return sendJson(res, 200, battle);
-      } catch (err) {
-        return sendJson(res, 404, { error: err.message });
-      }
-    }
- 
-    // POST /api/battles/:id/join
-    if (action === "join" && req.method === "POST") {
-      try {
-        const result = await joinBattle(battleId, session.sub);
-        return sendJson(res, 200, result);
-      } catch (err) {
-        return sendJson(res, 400, { error: err.message });
-      }
-    }
- 
-    // POST /api/battles/:id/submit
-    if (action === "submit" && req.method === "POST") {
-      try {
-        const { code } = await readJsonBody(req);
-        if (!code?.trim()) {
-          return sendJson(res, 400, { error: "code is required." });
+          return sendJson(res, 200, trends);
+        } catch (err) {
+          console.error("Error fetching audit trends:", err);
+          return sendJson(res, 500, { error: "Failed to fetch audit trends." });
         }
-        const result = await submitSolution(battleId, session.sub, code);
-        return sendJson(res, 200, result);
-      } catch (err) {
-        return sendJson(res, 400, { error: err.message });
       }
-    }
- 
-    // GET /api/battles/:id/result
-    if (action === "result" && req.method === "GET") {
-      try {
-        const battle = await getBattle(battleId);
-        if (!["completed", "expired"].includes(battle.status)) {
-          return sendJson(res, 409, { error: "Battle is not finished yet." });
+
+      if (pathname === "/api/memory/log" && req.method === "POST") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
+
+        let payload;
+        try {
+          payload = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Invalid JSON body." });
         }
-        return sendJson(res, 200, {
-          winner:     battle.winner,
-          xpAwarded:  battle.xpAwarded,
-          status:     battle.status,
+
+        const { topic, quality } = payload;
+        if (!topic || typeof topic !== "string" || topic.trim().length < 1) {
+          return sendJson(res, 400, { error: "Topic is required." });
+        }
+        if (
+          quality === undefined ||
+          isNaN(Number(quality)) ||
+          Number(quality) < 0 ||
+          Number(quality) > 5
+        ) {
+          return sendJson(res, 400, {
+            error: "Quality must be a number between 0 and 5.",
+          });
+        }
+
+        const trimmedTopic = topic.trim();
+        const updatedCard = await updateMemoryStore((store) => {
+          const userCards = store[session.sub] || {};
+          const existing = userCards[trimmedTopic] || { topic: trimmedTopic };
+          const updated = applySM2(existing, quality);
+          userCards[trimmedTopic] = updated;
+          store[session.sub] = userCards;
+          return updated;
         });
-      } catch (err) {
-        return sendJson(res, 404, { error: err.message });
+
+        return sendJson(res, 200, { success: true, card: updatedCard });
       }
+
+      if (pathname === "/api/memory/due" && req.method === "GET") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
+
+        const store = await readMemoryStore();
+        const userCards = store[session.sub] || {};
+        const now = new Date();
+        const due = Object.values(userCards).filter(
+          (card) => new Date(card.nextReviewDate) <= now,
+        );
+
+        return sendJson(res, 200, { success: true, due });
+      }
+
+      if (pathname === "/api/memory/all" && req.method === "GET") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
+
+        const store = await readMemoryStore();
+        const userCards = store[session.sub] || {};
+
+        return sendJson(res, 200, {
+          success: true,
+          cards: Object.values(userCards),
+        });
+      }
+
+      // ── Quiz Results (Firestore) ──────────────────────────────────────────────
+      if (pathname === "/api/quiz-results" && req.method === "POST") {
+        const session = getSession(req);
+        if (!session)
+          return sendJson(res, 401, { error: "Authentication required." });
+        if (!useFirestore)
+          return sendJson(res, 503, { error: "User store unavailable." });
+
+        let payload;
+        try {
+          payload = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Invalid JSON body." });
+        }
+
+        const {
+          quizId,
+          quizTitle,
+          score,
+          totalQuestions,
+          correctAnswers,
+          percentage,
+          topic,
+        } = payload;
+        if (
+          !quizId ||
+          !quizTitle ||
+          score === undefined ||
+          !totalQuestions ||
+          correctAnswers === undefined ||
+          percentage === undefined ||
+          !topic
+        ) {
+          return sendJson(res, 400, {
+            error:
+              "Missing required fields: quizId, quizTitle, score, totalQuestions, correctAnswers, percentage, topic.",
+          });
+        }
+
+        if (typeof score !== "number" || score < 0)
+          return sendJson(res, 400, {
+            error: "score must be a non-negative number.",
+          });
+        if (typeof totalQuestions !== "number" || totalQuestions < 1)
+          return sendJson(res, 400, { error: "totalQuestions must be >= 1." });
+        if (typeof correctAnswers !== "number" || correctAnswers < 0)
+          return sendJson(res, 400, { error: "correctAnswers must be >= 0." });
+        if (correctAnswers > totalQuestions)
+          return sendJson(res, 400, {
+            error: "correctAnswers cannot exceed totalQuestions.",
+          });
+        if (typeof percentage !== "number" || percentage < 0 || percentage > 100)
+          return sendJson(res, 400, { error: "percentage must be 0-100." });
+
+        try {
+          const attemptId = crypto.randomUUID();
+          const attempt = {
+            quizId: String(quizId),
+            quizTitle: String(quizTitle),
+            score: Number(score),
+            totalQuestions: Number(totalQuestions),
+            correctAnswers: Number(correctAnswers),
+            percentage: Number(percentage),
+            topic: String(topic),
+            completedAt: new Date().toISOString(),
+          };
+
+          await db
+            .collection("users")
+            .doc(session.sub)
+            .collection("quizResults")
+            .doc(attemptId)
+            .set(attempt);
+
+          return sendJson(res, 201, { success: true, attemptId, attempt });
+        } catch (error) {
+          console.error("Failed to save quiz result:", error);
+          return sendJson(res, 500, { error: "Failed to save quiz result." });
+        }
+      }
+
+      if (pathname === "/api/quiz-results" && req.method === "GET") {
+        const session = getSession(req);
+        if (!session)
+          return sendJson(res, 401, { error: "Authentication required." });
+        if (!useFirestore)
+          return sendJson(res, 503, { error: "User store unavailable." });
+
+        try {
+          const url = new URL(req.url, `http://${req.headers.host}`);
+          const parsedLimit = parseInt(url.searchParams.get("limit") || "20", 10);
+          const limit = Math.min(Number.isNaN(parsedLimit) ? 20 : parsedLimit, 100);
+          const topic = url.searchParams.get("topic");
+
+          let query = db
+            .collection("users")
+            .doc(session.sub)
+            .collection("quizResults")
+            .orderBy("completedAt", "desc")
+            .limit(limit);
+
+          if (topic) {
+            query = query.where("topic", "==", topic);
+          }
+
+          const snapshot = await query.get();
+          const results = snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }));
+
+          return sendJson(res, 200, {
+            success: true,
+            results,
+            count: results.length,
+          });
+        } catch (error) {
+          console.error("Failed to fetch quiz results:", error);
+          return sendJson(res, 500, { error: "Failed to fetch quiz results." });
+        }
+      }
+
+      if (pathname === "/api/reports/export/pdf" || pathname === "/api/reports/export/image") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Authentication required." });
+        return await handleReportRequest(req, res, pathname, session);
+      }
+
+      if (pathname === "/api/user/benchmark" && req.method === "GET") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Authentication required." });
+
+        try {
+          const benchmark = await getUserBenchmark(session.sub);
+          return sendJson(res, 200, { success: true, benchmark });
+        } catch (err) {
+          console.error("Benchmark error:", err);
+          return sendJson(res, 500, { error: "Failed to generate benchmark." });
+        }
+      }
+
+      // ── Battle routes ──────────────────────────────────────────────────────────
+      // All battle routes require Firestore. If useFirestore is false (local dev
+      // with no Firebase env vars), we return 503 rather than crashing.
+      // All routes require an active session — unauthenticated requests get 401.
+
+      if (pathname === "/api/battles" && req.method === "POST") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
+        if (!useFirestore) return sendJson(res, 503, { error: "Battle mode requires Firestore." });
+
+        try {
+          const { opponentEmail, difficulty } = await readJsonBody(req);
+          if (!opponentEmail?.trim()) {
+            return sendJson(res, 400, { error: "opponentEmail is required." });
+          }
+          if (!["Easy", "Medium", "Hard"].includes(difficulty)) {
+            return sendJson(res, 400, { error: "difficulty must be Easy, Medium, or Hard." });
+          }
+          const battleId = await createBattle(session.sub, opponentEmail.trim(), difficulty);
+          return sendJson(res, 201, { battleId });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
+
+      // GET /api/battles/history  — must be declared BEFORE the :id pattern below
+      // or "history" gets captured as a battle ID.
+      if (pathname === "/api/battles/history" && req.method === "GET") {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
+        if (!useFirestore) return sendJson(res, 503, { error: "Battle mode requires Firestore." });
+
+        try {
+          const params = new URL(req.url, `http://${req.headers.host}`).searchParams;
+          const limit = Math.min(parseInt(params.get("limit") || "20", 10), 50);
+          const startAfter = params.get("cursor") || null;
+          const history = await getHistory(session.sub, limit, startAfter);
+          return sendJson(res, 200, {
+            history,
+            nextCursor: history.length === limit ? history[history.length - 1].id : null,
+          });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
+
+      // Dynamic battle routes: /api/battles/:id and /api/battles/:id/(join|submit|result)
+      const battleMatch = pathname.match(
+        /^\/api\/battles\/([^/]+?)(?:\/(join|submit|result))?$/
+      );
+
+      if (battleMatch) {
+        const session = getSession(req);
+        if (!session) return sendJson(res, 401, { error: "Login required." });
+        if (!useFirestore) return sendJson(res, 503, { error: "Battle mode requires Firestore." });
+
+        const [, battleId, action] = battleMatch;
+
+        // GET /api/battles/:id — poll endpoint, returns state + timeRemainingMs
+        if (!action && req.method === "GET") {
+          try {
+            const battle = await getBattle(battleId);
+            return sendJson(res, 200, battle);
+          } catch (err) {
+            return sendJson(res, 404, { error: err.message });
+          }
+        }
+
+        // POST /api/battles/:id/join
+        if (action === "join" && req.method === "POST") {
+          try {
+            const result = await joinBattle(battleId, session.sub);
+            return sendJson(res, 200, result);
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+
+        // POST /api/battles/:id/submit
+        if (action === "submit" && req.method === "POST") {
+          try {
+            const { code } = await readJsonBody(req);
+            if (!code?.trim()) {
+              return sendJson(res, 400, { error: "code is required." });
+            }
+            const result = await submitSolution(battleId, session.sub, code);
+            return sendJson(res, 200, result);
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+
+        // GET /api/battles/:id/result
+        if (action === "result" && req.method === "GET") {
+          try {
+            const battle = await getBattle(battleId);
+            if (!["completed", "expired"].includes(battle.status)) {
+              return sendJson(res, 409, { error: "Battle is not finished yet." });
+            }
+            return sendJson(res, 200, {
+              winner: battle.winner,
+              xpAwarded: battle.xpAwarded,
+              status: battle.status,
+            });
+          } catch (err) {
+            return sendJson(res, 404, { error: err.message });
+          }
+        }
+      }
+      // ── End battle routes ─────
+
+      if (pathname === "/api/verify-email" && req.method === "GET") {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const token = url.searchParams.get("token");
+        if (!token) return sendJson(res, 400, { error: "Missing token." });
+
+        const users = await readUsers();
+        const idx = users.findIndex(
+          (u) => u.verifyToken === token && u.verifyTokenExpiry > Date.now()
+        );
+        if (idx === -1) return sendJson(res, 400, { error: "Link is invalid or expired." });
+
+        users[idx].emailVerified = true;
+        users[idx].verifyToken = null;
+        users[idx].verifyTokenExpiry = null;
+        await writeUsers(users);
+
+        const sessionToken = createAccessToken(users[idx]);
+        res.setHeader("Set-Cookie", authCookies(sessionToken, req));
+        return sendJson(res, 200, { ok: true });
+      }
+
+      if (pathname === "/api/resend-verification" && req.method === "POST") {
+        if (!applyRateLimit(req, res, resendVerificationLimiter, "Too many verification requests. Please try again later.")) {
+          return;
+        }
+        const body = await readJsonBody(req);
+        const email = String(body.email || "").trim().toLowerCase();
+        if (!email) return sendJson(res, 400, { error: "Email required." });
+
+        const users = await readUsers();
+        const idx = users.findIndex((u) => u.email === email);
+        if (idx === -1 || users[idx].emailVerified) return sendJson(res, 200, { ok: true });
+
+        const newToken = crypto.randomBytes(32).toString("hex");
+        users[idx].verifyToken = newToken;
+        users[idx].verifyTokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
+        await writeUsers(users);
+
+        sendVerificationEmail(email, users[idx].name, newToken).catch((err) =>
+          console.error("[email] Resend failed:", err)
+        );
+        return sendJson(res, 200, { ok: true });
+      }
+
+      return sendJson(res, 404, { error: "Not found." });
     }
-  }
-  // ── End battle routes ─────
-
-  if (pathname === "/api/verify-email" && req.method === "GET") {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const token = url.searchParams.get("token");
-    if (!token) return sendJson(res, 400, { error: "Missing token." });
-
-    const users = await readUsers();
-    const idx = users.findIndex(
-      (u) => u.verifyToken === token && u.verifyTokenExpiry > Date.now()
-    );
-    if (idx === -1) return sendJson(res, 400, { error: "Link is invalid or expired." });
-
-    users[idx].emailVerified = true;
-    users[idx].verifyToken = null;
-    users[idx].verifyTokenExpiry = null;
-    await writeUsers(users);
-
-    const sessionToken = createAccessToken(users[idx]);
-    res.setHeader("Set-Cookie", authCookies(sessionToken, req));
-    return sendJson(res, 200, { ok: true });
-  }
-
-  if (pathname === "/api/resend-verification" && req.method === "POST") {
-    if (!applyRateLimit(req, res, resendVerificationLimiter, "Too many verification requests. Please try again later.")) {
-      return;
-    }
-    const body = await readJsonBody(req);
-    const email = String(body.email || "").trim().toLowerCase();
-    if (!email) return sendJson(res, 400, { error: "Email required." });
-
-    const users = await readUsers();
-    const idx = users.findIndex((u) => u.email === email);
-    if (idx === -1 || users[idx].emailVerified) return sendJson(res, 200, { ok: true });
-
-    const newToken = crypto.randomBytes(32).toString("hex");
-    users[idx].verifyToken = newToken;
-    users[idx].verifyTokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
-    await writeUsers(users);
-
-    sendVerificationEmail(email, users[idx].name, newToken).catch((err) =>
-      console.error("[email] Resend failed:", err)
-    );
-    return sendJson(res, 200, { ok: true });
-  }
-
-  return sendJson(res, 404, { error: "Not found." });
-}
 
 function resolveStaticPath(pathname) {
-const routes = {
-  "/": "index.html",
-  "/login": "pages/auth/login.html",
-  "/profile": "pages/profile/public-profile.html",
-  "/signup": "pages/auth/signup.html",
-  "/verify-email": "pages/auth/verify-email.html",
-    "/community": "community.html",
-    "/python-learning": "python-learning.html",
-    "/javascript-learning": "javascript-learning.html",
-    "/dbms-learning": "dbms-learning.html",
-    "/powerbi-learning": "powerbi-learning.html",
-    "/cplusplus-learning": "cplusplus-learning.html",
-    "/learning/php": "php-learning.html",
-    "/php-learning": "php-learning.html",
-    "/learning/oop": "oop-learning.html",
-    "/oop-learning": "oop-learning.html",
-    "/feedback": "feedback.html",
-    "/feedback.html": "feedback.html",
-    "/memory-scanner": "memory-scanner.html",
-    "/memory-scanner.html": "memory-scanner.html",
-    "/algorithm-timeline": "algorithm-timeline.html",
-    "/support-page": "support-page/index.html",
-    "/support-page/": "support-page/index.html",
-  };
-  let mapped = routes[pathname];
-  if (!mapped) {
-    const basePath = pathname.slice(1);
-    mapped = path.extname(basePath) ? basePath : basePath + ".html";
-  }
-  const filePath = path.resolve(ROOT, mapped);
-  const rel = path.relative(ROOT, filePath);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+      const routes = {
+        "/": "index.html",
+        "/login": "pages/auth/login.html",
+        "/profile": "pages/profile/public-profile.html",
+        "/signup": "pages/auth/signup.html",
+        "/verify-email": "pages/auth/verify-email.html",
+        "/community": "community.html",
+        "/python-learning": "python-learning.html",
+        "/javascript-learning": "javascript-learning.html",
+        "/dbms-learning": "dbms-learning.html",
+        "/powerbi-learning": "powerbi-learning.html",
+        "/cplusplus-learning": "cplusplus-learning.html",
+        "/learning/php": "php-learning.html",
+        "/php-learning": "php-learning.html",
+        "/learning/oop": "oop-learning.html",
+        "/oop-learning": "oop-learning.html",
+        "/feedback": "feedback.html",
+        "/feedback.html": "feedback.html",
+        "/memory-scanner": "memory-scanner.html",
+        "/memory-scanner.html": "memory-scanner.html",
+        "/algorithm-timeline": "algorithm-timeline.html",
+        "/support-page": "support-page/index.html",
+        "/support-page/": "support-page/index.html",
+      };
+      let mapped = routes[pathname];
+      if (!mapped) {
+        const basePath = pathname.slice(1);
+        mapped = path.extname(basePath) ? basePath : basePath + ".html";
+      }
+      const filePath = path.resolve(ROOT, mapped);
+      const rel = path.relative(ROOT, filePath);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
 
-  // ── Arbitrary File Disclosure Prevention ──────────────────────────────────
-  const fileName = path.basename(filePath);
+      // ── Arbitrary File Disclosure Prevention ──────────────────────────────────
+      const fileName = path.basename(filePath);
 
-  // 1. Block hidden files and sensitive directories
-  if (
-    fileName.startsWith(".") ||
-    rel.startsWith("data" + path.sep) ||
-    rel.startsWith("api" + path.sep) ||
-    rel.startsWith("node_modules" + path.sep)
-  ) {
-    return null;
-  }
+      // 1. Block hidden files and sensitive directories
+      if (
+        fileName.startsWith(".") ||
+        rel.startsWith("data" + path.sep) ||
+        rel.startsWith("api" + path.sep) ||
+        rel.startsWith("node_modules" + path.sep)
+      ) {
+        return null;
+      }
 
-  // 2. Block specific sensitive root files
-  const sensitiveFiles = [
-    "server.js",
-    "firebase.js",
-    "package.json",
-    "package-lock.json",
-    "vercel.json",
-  ];
-  if (sensitiveFiles.includes(fileName)) {
-    return null;
-  }
+      // 2. Block specific sensitive root files
+      const sensitiveFiles = [
+        "server.js",
+        "firebase.js",
+        "package.json",
+        "package-lock.json",
+        "vercel.json",
+      ];
+      if (sensitiveFiles.includes(fileName)) {
+        return null;
+      }
 
-  // 3. Extension whitelist (only serve files with known mime types)
-  const ext = path.extname(filePath);
-  if (!mimeTypes[ext]) {
-    return null;
-  }
-  // ──────────────────────────────────────────────────────────────────────────
+      // 3. Extension whitelist (only serve files with known mime types)
+      const ext = path.extname(filePath);
+      if (!mimeTypes[ext]) {
+        return null;
+      }
+      // ──────────────────────────────────────────────────────────────────────────
 
-  return filePath;
-}
-
-async function serveStatic(req, res, pathname) {
-  const filePath = resolveStaticPath(pathname);
-  if (!filePath) {
-    res.writeHead(403);
-    return res.end("Forbidden");
-  }
-
-  try {
-    const stat = await fs.stat(filePath);
-    const target = stat.isDirectory()
-      ? path.join(filePath, "index.html")
-      : filePath;
-    const ext = path.extname(target);
-    let content = await fs.readFile(target);
-
-    const headers = {
-      "X-Content-Type-Options": "nosniff",
-      "X-Frame-Options": "SAMEORIGIN",
-      "X-XSS-Protection": "1; mode=block",
-      "Referrer-Policy": "strict-origin-when-cross-origin",
-      "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
-    };
-
-    if (ext === ".html") {
-      // Generate a dynamic nonce for CSP script elements
-      const nonce = crypto.randomBytes(16).toString("base64");
-      
-      // Inject nonce into script tags in the HTML content
-      let htmlStr = content.toString("utf-8");
-      htmlStr = htmlStr.replace(/<script(\s|>)/gi, `<script nonce="${nonce}"$1`);
-      content = Buffer.from(htmlStr, "utf-8");
-
-      headers["Content-Security-Policy"] = 
-        `default-src 'self'; ` +
-        `script-src 'self' 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://apis.google.com; ` +
-        `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; ` +
-        `font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; ` +
-        `img-src 'self' data: https: blob:; ` +
-        `connect-src 'self' https: wss:; ` +
-        `frame-src 'self' https://*.firebaseapp.com; ` +
-        `object-src 'none'; ` +
-        `base-uri 'self';`;
+      return filePath;
     }
 
-    headers["Content-Type"] = mimeTypes[ext] || "application/octet-stream";
-    res.writeHead(200, headers);
-    res.end(content);
-  } catch {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Not found");
-  }
-}
+    async function serveStatic(req, res, pathname) {
+      const filePath = resolveStaticPath(pathname);
+      if (!filePath) {
+        res.writeHead(403);
+        return res.end("Forbidden");
+      }
 
-const server = http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    const pathname = normalizePathname(decodeURIComponent(url.pathname));
+      try {
+        const stat = await fs.stat(filePath);
+        const target = stat.isDirectory()
+          ? path.join(filePath, "index.html")
+          : filePath;
+        const ext = path.extname(target);
+        let content = await fs.readFile(target);
 
-    const requestValidation = validateRequest(req);
+        const headers = {
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-XSS-Protection": "1; mode=block",
+          "Referrer-Policy": "strict-origin-when-cross-origin",
+          "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+        };
 
-    if (!requestValidation.valid) {
-      return sendJson(res, requestValidation.status, {
-        error: requestValidation.message,
-      });
-    }
+        if (ext === ".html") {
+          // Generate a dynamic nonce for CSP script elements
+          const nonce = crypto.randomBytes(16).toString("base64");
 
-    if (pathname.startsWith("/api/")) {
-      return await handleApi(req, res, pathname);
-    }
+          // Inject nonce into script tags in the HTML content
+          let htmlStr = content.toString("utf-8");
+          htmlStr = htmlStr.replace(/<script(\s|>)/gi, `<script nonce="${nonce}"$1`);
+          content = Buffer.from(htmlStr, "utf-8");
 
-    if (pathname === "/logout") {
-      return redirect(res, "/login", { "Set-Cookie": clearAuthCookies() });
-    }
-
-    const authorization = authorizeRequest(req, pathname);
-
-    if (!authorization.authorized) {
-      return redirect(res, authorization.redirectTo);
-    }
-
-    return await serveStatic(req, res, pathname);
-  } catch (error) {
-    console.error(error);
-    sendJson(res, 500, { error: "Something went wrong." });
-  }
-});
-
-// --- PHASE 1 ADDITION: SOCKET.IO LOGIC ---
-const io = new SocketIOServer(server);
-
-io.on("connection", (socket) => {
-console.log("🟢 New client connected:", socket.id);
-
-
-
-
-// ==========================================
-// AI INTERVIEWER - GEMINI API INTEGRATION
-// ==========================================
-socket.on('ai-evaluate-code', async (data = {}) => {
-    // Bot Fix 1: Validate payload first
-    if (typeof data !== 'object' || typeof data.code !== 'string' || typeof data.language !== 'string' || typeof data.problem !== 'string') {
-        return socket.emit('ai-interviewer-feedback', { hint: 'Unable to analyze code right now.' });
-    }
-
-    console.log(`🤖 AI Interviewer analyzing code...`);
-    
-    try {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            socket.emit('ai-interviewer-feedback', { hint: "Backend Error: GEMINI_API_KEY is missing in .env!" });
-            return;
+          headers["Content-Security-Policy"] =
+            `default-src 'self'; ` +
+            `script-src 'self' 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://apis.google.com; ` +
+            `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; ` +
+            `font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; ` +
+            `img-src 'self' data: https: blob:; ` +
+            `connect-src 'self' https: wss:; ` +
+            `frame-src 'self' https://*.firebaseapp.com; ` +
+            `object-src 'none'; ` +
+            `base-uri 'self';`;
         }
 
-        // The Real Gemini Prompt
-        const prompt = `You are an expert FAANG technical interviewer. A candidate is solving the "${data.problem}" problem in ${data.language}.
+        headers["Content-Type"] = mimeTypes[ext] || "application/octet-stream";
+        res.writeHead(200, headers);
+        res.end(content);
+      } catch {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Not found");
+      }
+    }
+
+    const server = http.createServer(async (req, res) => {
+      try {
+        const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        const pathname = normalizePathname(decodeURIComponent(url.pathname));
+
+        const requestValidation = validateRequest(req);
+
+        if (!requestValidation.valid) {
+          return sendJson(res, requestValidation.status, {
+            error: requestValidation.message,
+          });
+        }
+
+        if (pathname.startsWith("/api/")) {
+          return await handleApi(req, res, pathname);
+        }
+
+        if (pathname === "/logout") {
+          return redirect(res, "/login", { "Set-Cookie": clearAuthCookies() });
+        }
+
+        const authorization = authorizeRequest(req, pathname);
+
+        if (!authorization.authorized) {
+          return redirect(res, authorization.redirectTo);
+        }
+
+        return await serveStatic(req, res, pathname);
+      } catch (error) {
+        console.error(error);
+        sendJson(res, 500, { error: "Something went wrong." });
+      }
+    });
+
+    // --- PHASE 1 ADDITION: SOCKET.IO LOGIC ---
+    const io = new SocketIOServer(server);
+
+    io.on("connection", (socket) => {
+      console.log("🟢 New client connected:", socket.id);
+
+
+
+
+      // ==========================================
+      // AI INTERVIEWER - GEMINI API INTEGRATION
+      // ==========================================
+      socket.on('ai-evaluate-code', async (data = {}) => {
+        // Bot Fix 1: Validate payload first
+        if (typeof data !== 'object' || typeof data.code !== 'string' || typeof data.language !== 'string' || typeof data.problem !== 'string') {
+          return socket.emit('ai-interviewer-feedback', { hint: 'Unable to analyze code right now.' });
+        }
+
+        console.log(`🤖 AI Interviewer analyzing code...`);
+
+        try {
+          const apiKey = process.env.GEMINI_API_KEY;
+          if (!apiKey) {
+            socket.emit('ai-interviewer-feedback', { hint: "Backend Error: GEMINI_API_KEY is missing in .env!" });
+            return;
+          }
+
+          // The Real Gemini Prompt
+          const prompt = `You are an expert FAANG technical interviewer. A candidate is solving the "${data.problem}" problem in ${data.language}.
         Here is their current code:
         
         ${data.code}
@@ -2312,146 +2311,146 @@ socket.on('ai-evaluate-code', async (data = {}) => {
         2. Focus on time/space complexity, pointing out edge cases, or spotting logical flaws.
         3. Keep the tone encouraging, professional, and directly address the logic in their code.`;
 
-        // Real API Call to Gemini
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          // Real API Call to Gemini
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }]
+              contents: [{ parts: [{ text: prompt }] }]
             })
-        });
+          });
 
-        const result = await response.json();
-        
-        if (result.candidates && result.candidates.length > 0) {
+          const result = await response.json();
+
+          if (result.candidates && result.candidates.length > 0) {
             let aiHint = result.candidates[0].content.parts[0].text;
             aiHint = aiHint.replace(/\*/g, '').replace(/\`/g, ''); // Clean markdown
             socket.emit('ai-interviewer-feedback', { hint: aiHint });
-        } else {
+          } else {
             socket.emit('ai-interviewer-feedback', { hint: "Hmm, your logic is interesting... keep going!" });
+          }
+
+        } catch (error) {
+          console.error("Gemini API Error:", error);
+          socket.emit('ai-interviewer-feedback', { hint: "My AI brain is taking a break. Keep coding!" });
         }
-        
-    } catch (error) {
-        console.error("Gemini API Error:", error);
-        socket.emit('ai-interviewer-feedback', { hint: "My AI brain is taking a break. Keep coding!" });
-    }
-});
+      });
 
-// Draw events (whiteboard)
-socket.on('draw', (data) => {
-    // Broadcast to everyone else in the room
-    socket.to(data.roomId).emit('receive-draw', data);
-});
+      // Draw events (whiteboard)
+      socket.on('draw', (data) => {
+        // Broadcast to everyone else in the room
+        socket.to(data.roomId).emit('receive-draw', data);
+      });
 
-// Clear board
-socket.on('clear-board', ({ roomId }) => {
-    socket.to(roomId).emit('receive-clear');
-});
+      // Clear board
+      socket.on('clear-board', ({ roomId }) => {
+        socket.to(roomId).emit('receive-clear');
+      });
 
-// Shared notes
-socket.on('share-notes', ({ roomId, text }) => {
-    socket.to(roomId).emit('receive-notes', text);
-});
+      // Shared notes
+      socket.on('share-notes', ({ roomId, text }) => {
+        socket.to(roomId).emit('receive-notes', text);
+      });
 
-// Chat messages
-socket.on('chat-message', (data) => {
-    socket.to(data.roomId).emit('chat-message', data);
-});
+      // Chat messages
+      socket.on('chat-message', (data) => {
+        socket.to(data.roomId).emit('chat-message', data);
+      });
 
-// ── VOICE CHAT (WebRTC signaling) ──
+      // ── VOICE CHAT (WebRTC signaling) ──
 
-socket.on('voice-join', ({ roomId, userId }) => {
-    socket.to(roomId).emit('voice-user-joined', { userId });
-});
+      socket.on('voice-join', ({ roomId, userId }) => {
+        socket.to(roomId).emit('voice-user-joined', { userId });
+      });
 
-socket.on('voice-leave', ({ roomId, userId }) => {
-    socket.to(roomId).emit('voice-user-left', { userId });
-});
+      socket.on('voice-leave', ({ roomId, userId }) => {
+        socket.to(roomId).emit('voice-user-left', { userId });
+      });
 
-// WebRTC offer
-socket.on('voice-offer', ({ roomId, offer, to, from }) => {
-    const targetSocketId = userSocketMap.get(to);
-    if (targetSocketId) io.to(targetSocketId).emit('voice-offer', { offer, from });
-});
+      // WebRTC offer
+      socket.on('voice-offer', ({ roomId, offer, to, from }) => {
+        const targetSocketId = userSocketMap.get(to);
+        if (targetSocketId) io.to(targetSocketId).emit('voice-offer', { offer, from });
+      });
 
-socket.on('voice-answer', ({ roomId, answer, to, from }) => {
-    const targetSocketId = userSocketMap.get(to);
-    if (targetSocketId) io.to(targetSocketId).emit('voice-answer', { answer, from });
-});
+      socket.on('voice-answer', ({ roomId, answer, to, from }) => {
+        const targetSocketId = userSocketMap.get(to);
+        if (targetSocketId) io.to(targetSocketId).emit('voice-answer', { answer, from });
+      });
 
-socket.on('voice-ice', ({ roomId, candidate, to, from }) => {
-    const targetSocketId = userSocketMap.get(to);
-    if (targetSocketId) io.to(targetSocketId).emit('voice-ice', { candidate, from });
-});
+      socket.on('voice-ice', ({ roomId, candidate, to, from }) => {
+        const targetSocketId = userSocketMap.get(to);
+        if (targetSocketId) io.to(targetSocketId).emit('voice-ice', { candidate, from });
+      });
 
-// ── END OF ADDITIONS ──
+      // ── END OF ADDITIONS ──
 
 
-  socket.on("join-room", (roomId, userId) => {
-      socket.join(roomId);
-      // Store user mapping
-    userSocketMap.set(userId, socket.id);
-    socket.userId = userId;
-    socket.roomId = roomId;
-     console.log(`👥 User ${userId} joined Room ${roomId}`);
-      
-      socket.to(roomId).emit("user-connected", userId);
+      socket.on("join-room", (roomId, userId) => {
+        socket.join(roomId);
+        // Store user mapping
+        userSocketMap.set(userId, socket.id);
+        socket.userId = userId;
+        socket.roomId = roomId;
+        console.log(`👥 User ${userId} joined Room ${roomId}`);
 
-      socket.on("disconnect", () => {
-    if (socket.userId) {
-        userSocketMap.delete(socket.userId);
-        if (socket.roomId) {
-            socket.to(socket.roomId).emit("user-disconnected", socket.userId);
-        }
-    }
-});
-  });
-});
-// -----------------------------------------
+        socket.to(roomId).emit("user-connected", userId);
 
-export { server, hashPassword, passwordMatches, applySM2, validateSignup, updateMemoryStore, readMemoryStore };
-if (process.env.VERCEL === "1") {
-  db = initializeFirebase();
-  useFirestore = !!db;
-}
+        socket.on("disconnect", () => {
+          if (socket.userId) {
+            userSocketMap.delete(socket.userId);
+            if (socket.roomId) {
+              socket.to(socket.roomId).emit("user-disconnected", socket.userId);
+            }
+          }
+        });
+      });
+    });
+    // -----------------------------------------
 
-
-
-if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
-  loadEnvFile()
-    .then(() => {
+    export { server, hashPassword, passwordMatches, applySM2, validateSignup, updateMemoryStore, readMemoryStore };
+    if (process.env.VERCEL === "1") {
       db = initializeFirebase();
       useFirestore = !!db;
-      const port = Number(process.env.PORT || 3000);
-      const host = process.env.HOST || "127.0.0.1";
+    }
 
-      server.listen(port, host, () => {
-        const url = `http://${host}:${port}`;
-        console.log(`Server running at ${url}`);
-        if (!process.env.SESSION_SECRET) {
-          if (process.env.NODE_ENV === "production") {
-            console.error("FATAL: SESSION_SECRET is required in production mode.");
-            process.exit(1);
-          }
-          console.warn(
-            "Using a development SESSION_SECRET. Set SESSION_SECRET before deploying.",
-          );
-        }
-      });
 
-      server.on("error", (err) => {
-        if (err.code === "EADDRINUSE") {
-          console.error(`\n❌ Port ${port} is already in use.`);
-          console.error(`   Stop the existing server first, then run: npm run dev\n`);
+
+    if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
+      loadEnvFile()
+        .then(() => {
+          db = initializeFirebase();
+          useFirestore = !!db;
+          const port = Number(process.env.PORT || 3000);
+          const host = process.env.HOST || "127.0.0.1";
+
+          server.listen(port, host, () => {
+            const url = `http://${host}:${port}`;
+            console.log(`Server running at ${url}`);
+            if (!process.env.SESSION_SECRET) {
+              if (process.env.NODE_ENV === "production") {
+                console.error("FATAL: SESSION_SECRET is required in production mode.");
+                process.exit(1);
+              }
+              console.warn(
+                "Using a development SESSION_SECRET. Set SESSION_SECRET before deploying.",
+              );
+            }
+          });
+
+          server.on("error", (err) => {
+            if (err.code === "EADDRINUSE") {
+              console.error(`\n❌ Port ${port} is already in use.`);
+              console.error(`   Stop the existing server first, then run: npm run dev\n`);
+              process.exit(1);
+            } else {
+              throw err;
+            }
+          });
+        })
+        .catch((error) => {
+          console.error("Failed to load environment configuration:", error);
           process.exit(1);
-        } else {
-          throw err;
-        }
-      });
-    })
-    .catch((error) => {
-      console.error("Failed to load environment configuration:", error);
-      process.exit(1);
-    });
-}
-
+        });
+    }
+  
