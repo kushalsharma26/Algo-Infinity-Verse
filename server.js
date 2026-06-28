@@ -1538,8 +1538,88 @@ async function handleApi(req, res, pathname) {
         }
       }
 
+<<<<<<< HEAD
       if (pathname === "/api/user/profile" && req.method === "GET") {
         const session = getSession(req);
+=======
+      if (pathname === "/api/feedback" && req.method === "POST") {
+    const session = getSession(req);
+    let payload;
+    try {
+      payload = await readJsonBody(req);
+    } catch (err) {
+      return sendJson(res, 400, { error: "Invalid JSON body." });
+    }
+
+    const { feedbackType, subject, message } = payload;
+    if (!feedbackType || !subject || !message) {
+      return sendJson(res, 400, {
+        error: "Feedback type, subject, and message are required.",
+      });
+    }
+
+    const allowedTypes = [
+      "Suggestion",
+      "Bug Report",
+      "Feature Request",
+      "General Feedback",
+    ];
+    if (!allowedTypes.includes(feedbackType)) {
+      return sendJson(res, 400, { error: "Invalid feedback type." });
+    }
+
+    if (subject.trim().length < 3) {
+      return sendJson(res, 400, {
+        error: "Subject must be at least 3 characters long.",
+      });
+    }
+
+    if (message.trim().length < 10) {
+      return sendJson(res, 400, {
+        error: "Message must be at least 10 characters long.",
+      });
+    }
+
+    const feedbackData = {
+      userId: session ? session.sub : null,
+      userName: session ? session.name : null,
+      userEmail: session ? session.email : null,
+      feedbackType,
+      subject: subject.trim(),
+      message: message.trim(),
+      status: "new",
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      if (useFirestore) {
+        const docRef = await db.collection("feedback").add(feedbackData);
+        feedbackData.id = docRef.id;
+      } else {
+        const feedbackFile = path.join(DATA_DIR, "feedback.json");
+        await fs.mkdir(DATA_DIR, { recursive: true });
+        let feedbackList = [];
+        try {
+          const raw = await fs.readFile(feedbackFile, "utf8");
+          feedbackList = JSON.parse(raw || "[]");
+        } catch (err) {
+          if (err.code !== "ENOENT") throw err;
+        }
+        feedbackData.id = crypto.randomUUID();
+        feedbackList.push(feedbackData);
+        await fs.writeFile(
+          feedbackFile,
+          JSON.stringify(feedbackList, null, 2) + "\n",
+        );
+      }
+
+      return sendJson(res, 201, { success: true, feedback: feedbackData });
+    } catch (err) {
+      console.error("Error saving feedback:", err);
+      return sendJson(res, 500, { error: "Failed to save feedback." });
+    }
+  }
+>>>>>>> 534f74385bace2683601b0939b48e6b06ee72634
 
         const userData = {
           user: {
@@ -2182,7 +2262,90 @@ function resolveStaticPath(pathname) {
       }
       // ──────────────────────────────────────────────────────────────────────────
 
+<<<<<<< HEAD
       return filePath;
+=======
+  return filePath;
+}
+
+function getCacheControlHeader(ext) {
+  if (ext === ".html") {
+    return "no-store, no-cache, must-revalidate, private";
+  }
+  if (ext === ".css" || ext === ".js" || ext === ".json") {
+    return "no-cache, public";
+  }
+  if ([".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp"].includes(ext)) {
+    return "public, max-age=86400";
+  }
+  if ([".woff", ".woff2", ".eot", ".ttf", ".otf"].includes(ext)) {
+    return "public, max-age=2592000, immutable";
+  }
+  return "no-cache";
+}
+
+async function serveStatic(req, res, pathname) {
+  const filePath = resolveStaticPath(pathname);
+  if (!filePath) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+
+  try {
+    const stat = await fs.stat(filePath);
+    const target = stat.isDirectory()
+      ? path.join(filePath, "index.html")
+      : filePath;
+    
+    const fileStat = await fs.stat(target);
+    const ext = path.extname(target);
+
+    // ETag generation based on file size and mtime
+    const mtimeMs = fileStat.mtime.getTime();
+    const size = fileStat.size;
+    const etag = `W/"${size}-${mtimeMs}"`;
+    const cacheControl = getCacheControlHeader(ext);
+
+    const headers = {
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "X-XSS-Protection": "1; mode=block",
+      "Referrer-Policy": "strict-origin-when-cross-origin",
+      "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+      "Cache-Control": cacheControl,
+      "ETag": etag,
+    };
+
+    // Handle If-None-Match conditional request
+    const clientEtag = req.headers["if-none-match"];
+    if (clientEtag === etag) {
+      headers["Content-Type"] = mimeTypes[ext] || "application/octet-stream";
+      res.writeHead(304, headers);
+      return res.end();
+    }
+
+    let content = await fs.readFile(target);
+
+    if (ext === ".html") {
+      // Generate a dynamic nonce for CSP script elements
+      const nonce = crypto.randomBytes(16).toString("base64");
+      
+      // Inject nonce into script tags in the HTML content
+      let htmlStr = content.toString("utf-8");
+      htmlStr = htmlStr.replace(/<script(\s|>)/gi, `<script nonce="${nonce}"$1`);
+      content = Buffer.from(htmlStr, "utf-8");
+
+      headers["Content-Security-Policy"] = 
+        `default-src 'self'; ` +
+        `script-src 'self' 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://apis.google.com; ` +
+        `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; ` +
+        `font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; ` +
+        `img-src 'self' data: https: blob:; ` +
+        `connect-src 'self' https: wss:; ` +
+        `frame-src 'self' https://*.firebaseapp.com; ` +
+        `object-src 'none'; ` +
+        `base-uri 'self';`;
+>>>>>>> 534f74385bace2683601b0939b48e6b06ee72634
     }
 
     async function serveStatic(req, res, pathname) {
@@ -2452,6 +2615,19 @@ function resolveStaticPath(pathname) {
         .catch((error) => {
           console.error("Failed to load environment configuration:", error);
           process.exit(1);
+<<<<<<< HEAD
         });
     }
   
+=======
+        } else {
+          throw err;
+        }
+      });
+    })
+    .catch((error) => {
+      console.error("Failed to load environment configuration:", error);
+      process.exit(1);
+    });
+}
+>>>>>>> 534f74385bace2683601b0939b48e6b06ee72634
