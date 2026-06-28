@@ -2442,9 +2442,10 @@ function resolveStaticPath(pathname) {
             if (err.code === "EADDRINUSE") {
               console.error(`\n❌ Port ${port} is already in use.`);
               console.error(`   Stop the existing server first, then run: npm run dev\n`);
-              process.exit(1);
+                process.exit(1);
             } else {
-              throw err;
+                console.error('Server error:', err);
+                process.exit(1);
             }
           });
         })
