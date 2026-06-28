@@ -1578,9 +1578,30 @@ function updateBadges() {
   const grid = document.getElementById("badgesGrid");
   const badges = [{ id: 1, icon: "🌟", name: "First Steps", description: "Begin your journey", criteria: "Solve 1 problem", earned: userProgress.completedProblems.length >= 1 }, { id: 2, icon: "🔥", name: "On Fire", description: "Keep the momentum going", criteria: "Maintain a 7-day streak", earned: userProgress.streak >= 7 }, { id: 3, icon: "💎", name: "Diamond", description: "Reach a major XP milestone", criteria: "Earn 5,000 XP", earned: userProgress.xp >= 5000 }, { id: 4, icon: "🚀", name: "Rocket", description: "Speed through problems", criteria: "Solve 50 problems", earned: userProgress.completedProblems.length >= 50 }, { id: 5, icon: "👑", name: "Master", description: "Achieve expert problem-solving", criteria: "Solve 100 problems", earned: userProgress.completedProblems.length >= 100 }, { id: 6, icon: "🎯", name: "Sharpshooter", description: "Hit the target with consistency", criteria: "Solve 25 problems and earn 2,500 XP", earned: userProgress.completedProblems.length >= 25 && userProgress.xp >= 2500 }];
   const earned = badges.filter(b => b.earned).map(b => b.id);
-  if (JSON.stringify(earned) !== JSON.stringify(userProgress.badges)) { userProgress.badges = earned; saveUserData(); }
-  if (container) container.innerHTML = badges.map(badge => `<div class="badge ${badge.earned ? '' : 'locked'}" tabindex="0"><span class="badge-tooltip"><strong>${badge.name}</strong><span>${badge.description}</span><span>${badge.criteria}</span></span>${badge.icon}</div>`).join("");
-  if (grid) grid.innerHTML = badges.map(badge => `<div class="badge-lg ${badge.earned ? '' : 'locked'}" tabindex="0"><span class="badge-tooltip"><strong>${badge.name}</strong><span>${badge.description}</span><span>${badge.criteria}</span></span>${badge.icon}</div>`).join("");
+  const newlyEarned = Array.isArray(userProgress.badges) ? earned.filter(id => !userProgress.badges.includes(id)) : [];
+  
+  if (newlyEarned.length > 0) {
+    newlyEarned.forEach(id => {
+      const b = badges.find(x => x.id === id);
+      if (b) showNotification(`🏆 Badge Unlocked: ${b.name}!`, "success");
+    });
+    userProgress.badges = earned;
+    saveUserData();
+  } else if (JSON.stringify(earned) !== JSON.stringify(userProgress.badges)) {
+    userProgress.badges = earned;
+    saveUserData();
+  }
+
+  const getBadgeClass = (badge) => {
+    let classes = badge.earned ? '' : 'locked';
+    if (newlyEarned.includes(badge.id)) {
+      classes += ' badge-unlock-anim';
+    }
+    return classes;
+  };
+
+  if (container) container.innerHTML = badges.map(badge => `<div class="badge ${getBadgeClass(badge)}" tabindex="0"><span class="badge-tooltip"><strong>${badge.name}</strong><span>${badge.description}</span><span>${badge.criteria}</span></span>${badge.icon}</div>`).join("");
+  if (grid) grid.innerHTML = badges.map(badge => `<div class="badge-lg ${getBadgeClass(badge)}" tabindex="0"><span class="badge-tooltip"><strong>${badge.name}</strong><span>${badge.description}</span><span>${badge.criteria}</span></span>${badge.icon}</div>`).join("");
 }
 
 // ============================================
@@ -1686,7 +1707,20 @@ function checkLevelUp() {
   const levelNames = ["Beginner", "Novice", "Intermediate", "Advanced", "Expert", "Master", "Grandmaster", "Legend"];
   let newLevel = 1;
   for (let i = levels.length - 1; i >= 0; i--) { if (userProgress.xp >= levels[i]) { newLevel = i + 1; break; } }
-  if (newLevel > userProgress.level) showNotification(`🎉 Level Up! You're now Level ${newLevel} - ${levelNames[newLevel - 1]}`, "success");
+  if (newLevel > userProgress.level) {
+    showNotification(`🎉 Level Up! You're now Level ${newLevel} - ${levelNames[newLevel - 1]}`, "success");
+    const animEls = [
+      document.getElementById("levelBadge"),
+      document.getElementById("profileLevel"),
+      document.getElementById("profileLevelSection")
+    ];
+    animEls.forEach(el => {
+      if (el) {
+        el.classList.add("level-up-pulse");
+        el.addEventListener("animationend", () => el.classList.remove("level-up-pulse"), { once: true });
+      }
+    });
+  }
   userProgress.level = newLevel;
   const levelBadge = document.getElementById("levelBadge");
   if (levelBadge) levelBadge.textContent = `Level ${newLevel} - ${levelNames[newLevel - 1]}`;
@@ -1828,13 +1862,23 @@ function getBotResponse(question) {
 function initScrollEffects() {
   const scrollTopBtn = document.getElementById("scrollTopBtn");
   const backToTopBtn = document.getElementById("backToTopBtn");
+  const stars1 = document.querySelector(".stars");
+  const stars2 = document.querySelector(".stars2");
+  const stars3 = document.querySelector(".stars3");
   const setVisibleState = () => {
     const shouldShow = window.scrollY > 500;
     if (scrollTopBtn) scrollTopBtn.classList.toggle("visible", shouldShow);
     if (backToTopBtn) backToTopBtn.classList.toggle("show", shouldShow);
   };
-  window.addEventListener("scroll", setVisibleState);
-  setVisibleState();
+  const handleScrollEffects = () => {
+    setVisibleState();
+    const scrolled = window.scrollY;
+    if (stars1) stars1.style.backgroundPositionY = `${scrolled * 0.15}px`;
+    if (stars2) stars2.style.backgroundPositionY = `${-scrolled * 0.25}px`;
+    if (stars3) stars3.style.backgroundPositionY = `${scrolled * 0.4}px`;
+  };
+  window.addEventListener("scroll", handleScrollEffects);
+  handleScrollEffects();
   if (scrollTopBtn) scrollTopBtn.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
   if (backToTopBtn) backToTopBtn.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
   const observer = new IntersectionObserver((entries) => { entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add("animate-in"); }); }, { threshold: 0.1 });

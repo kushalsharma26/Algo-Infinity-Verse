@@ -8319,3 +8319,59 @@ html.light-mode .report-issue-btn:hover {
   background: #6d28d9;
   box-shadow: 0 12px 30px rgba(124, 58, 237, 0.6);
 }
+
+/* ===== GAMIFIED ANIMATIONS ===== */
+.level-up-pulse {
+  animation: levelUpPulseAnim 1.2s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+}
+
+@keyframes levelUpPulseAnim {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.7);
+    filter: brightness(1);
+  }
+  30% {
+    transform: scale(1.2);
+    box-shadow: 0 0 0 20px rgba(124, 58, 237, 0);
+    filter: brightness(1.5) drop-shadow(0 0 15px var(--primary-light));
+  }
+  60% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 30px rgba(124, 58, 237, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0);
+    filter: brightness(1);
+  }
+}
+
+.badge-unlock-anim {
+  animation: badgeUnlockScaleUp 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes badgeUnlockScaleUp {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+    filter: brightness(2);
+  }
+  50% {
+    transform: scale(1.3);
+    filter: brightness(1.5);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    filter: brightness(1);
+  }
+}
+
+/* Smooth transition overrides for any progress bar fills */
+.progress-fill,
+.step-progress-bar-fill,
+.xp-bar,
+.quiz-progress-fill {
+  transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
