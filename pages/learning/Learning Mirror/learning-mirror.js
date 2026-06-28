@@ -117,6 +117,14 @@ document.addEventListener("DOMContentLoaded", () => {
     elements.snapshotBar.style.width = `${snap.progress}%`;
 
     // Growth Summary Update
+    document.getElementById("topicsGrowth").textContent =
+      "+" + (current.topics - snap.topics);
+
+    document.getElementById("xpGrowth").textContent =
+      "+" + (current.xp - snap.xp);
+
+    document.getElementById("streakGrowth").textContent =
+      "+" + (current.streak - snap.streak) + " Days";
     const topicsDelta = current.topics - snap.topics;
     document.getElementById("topicsGrowth").textContent =
       (topicsDelta >= 0 ? "+" : "") + topicsDelta;
@@ -134,6 +142,10 @@ document.addEventListener("DOMContentLoaded", () => {
     elements.replayOutput.textContent = snap.replayText;
 
     elements.viewButtons.forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.view === view);
+    });
+
+    localStorage.setItem("learning-mirror-view", view);
       const isSelected = btn.dataset.view === view;
       btn.classList.toggle("active", isSelected);
       btn.setAttribute("aria-selected", isSelected);

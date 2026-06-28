@@ -35,10 +35,10 @@ const PROBLEMS = {
     },
     'valid-parentheses': {
         name: 'Valid Parentheses',
-        optimal: `function isValid(s) {
+        optimal: `function isValid(brackets) {
     const stack = [];
     const pairs = { '(': ')', '[': ']', '{': '}' };
-    for (const char of s) {
+    for (const char of brackets) {
         if (pairs[char]) {
             stack.push(char);
         } else {

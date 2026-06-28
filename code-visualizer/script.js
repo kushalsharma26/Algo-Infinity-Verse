@@ -298,35 +298,121 @@ function getCodeFromEditor() {
 
 // Initialize executor
 function initExecutor() {
-    const code = getCodeFromEditor();
-    executor = new CodeExecutor(code);
-    executor.highlightLine(0);
-    return executor;
+    try {
+        const code = getCodeFromEditor();
+
+        executor = new CodeExecutor(code);
+        executor.highlightLine(0);
+
+        return executor;
+    } catch (error) {
+        console.error(error);
+
+        executor = null;
+
+        updateConsoleUI([
+            "Failed to initialize executor.",
+            error.message,
+        ]);
+
+        updateTraceUI([
+            {
+                line: 0,
+                message: `❌ ${error.message}`,
+                time: new Date().toISOString(),
+            },
+        ]);
+
+        const status = document.getElementById("statusText");
+        if (status) {
+            status.textContent = "❌ Executor initialization failed";
+        }
+
+        return null;
+    }
 }
 
 // ====== BUTTON HANDLERS ======
 
 // Run
 document.getElementById('runBtn').addEventListener('click', () => {
-    if (!executor) initExecutor();
-    executor.runAll();
-    updateConsoleUI(executor.output);
+    if (!executor) {
+        executor = initExecutor();
+    }
+
+    if (!executor) return;
+
+    try {
+        executor.runAll();
+        updateConsoleUI(executor.output);
+    } catch (error) {
+        console.error(error);
+
+        updateConsoleUI([
+            "Execution failed.",
+            error.message,
+        ]);
+
+        updateTraceUI([
+            {
+                line: executor?.currentLine ?? 0,
+                message: `❌ ${error.message}`,
+                time: new Date().toISOString(),
+            },
+        ]);
+    }
 });
 
 // Step
 document.getElementById('stepBtn').addEventListener('click', () => {
-    if (!executor) initExecutor();
+    if (!executor) {
+        executor = initExecutor();
+    }
+
+    if (!executor) return;
+
+    try {
     executor.stepForward();
     updateConsoleUI(executor.output);
     updateVariablesUI(executor.variables);
+    } catch (error) {
+        console.error(error);
+
+        updateConsoleUI([
+            "Execution failed.",
+            error.message,
+        ]);
+
+        updateTraceUI([
+            {
+                line: executor?.currentLine ?? 0,
+                message: `❌ ${error.message}`,
+                time: new Date().toISOString(),
+            },
+        ]);
+    }
 });
 
 // Reset
 document.getElementById('resetBtn').addEventListener('click', () => {
-    if (!executor) initExecutor();
+    if (!executor) {
+        executor = initExecutor();
+    }
+
+    if (!executor) return;
+
+    try {
     executor.reset();
     updateConsoleUI([]);
     updateVariablesUI({});
+    } catch (error) {
+        console.error(error);
+
+        updateConsoleUI([
+            "Reset failed.",
+            error.message,
+        ]);
+    }
 });
 
 // ====== DARK MODE TOGGLE ======
@@ -346,7 +432,11 @@ document.addEventListener('DOMContentLoaded', () => {
     updateLineNumbers();
     
     // Initialize executor
-    initExecutor();
+    executor = initExecutor();
+
+    if (!executor) {
+        return;
+    }
     
     // Show initial state
     updateVariablesUI({});
@@ -368,14 +458,301 @@ function updateLineNumbers() {
 // Re-initialize when code changes
 document.getElementById('codeEditor').addEventListener('input', () => {
     if (executor) {
-        executor.reset();
-        initExecutor();
-        updateVariablesUI({});
-        updateTraceUI([]);
-        updateConsoleUI([]);
+        try {
+            executor.reset();
+        } catch (error) {
+            console.error(error);
+
+            updateConsoleUI([
+                "Reset failed.",
+                error.message,
+            ]);
+        }
     }
+
+    executor = initExecutor();
+
+    if (!executor) return;
+
+    updateVariablesUI({});
+    updateTraceUI([]);
+    updateConsoleUI([]);
+
+    updateVariablesUI({});
+    updateTraceUI([]);
+    updateConsoleUI([]);
 });
 
 window.addEventListener("resize", () => {
   if (typeof updateLineNumbers === 'function') updateLineNumbers();
 });
+
+/**
+ * Generates and downloads a stylized PDF certificate client-side.
+ * @param {string} userName - Name printed on the certificate
+ * @param {string} topicName - Completed learning track roadmap
+ * @param {string} date - Date of completion
+ * @param {string} certId - Unique verifiable hash/ID
+ */
+function downloadCertificatePDF(userName, topicName, date, certId) {
+  // Access the bundled library from window scope
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'px',
+    format: [842, 595] // Standard A4 Landscape dimension
+  });
+
+  // --- 1. Draw Aesthetic Certificate Background/Borders ---
+  doc.setFillColor(253, 253, 251); // Off-white ivory background
+  doc.rect(0, 0, 842, 595, 'F');
+
+  // Decorative elegant double borders
+  doc.setDrawColor(118, 75, 162); // Purple primary theme accent
+  doc.setLineWidth(8);
+  doc.rect(20, 20, 802, 555);
+  
+  doc.setDrawColor(102, 126, 234); // Indigo secondary inner border
+  doc.setLineWidth(2);
+  doc.rect(32, 32, 778, 531);
+
+  // --- 2. Typography & Header Section ---
+  doc.setFont("Helvetica", "bold");
+  doc.setFontSize(36);
+  doc.setTextColor(118, 75, 162);
+  doc.text("CERTIFICATE OF COMPLETION", 421, 110, { align: "center" });
+
+  doc.setFont("Helvetica", "normal");
+  doc.setFontSize(16);
+  doc.setTextColor(102, 102, 102);
+  doc.text("THIS IS PROUDLY PRESENTED TO", 421, 170, { align: "center" });
+
+  // --- 3. Dynamic User Name ---
+  doc.setFont("Helvetica", "bold");
+  doc.setFontSize(28);
+  doc.setTextColor(34, 34, 34);
+  doc.text(userName, 421, 225, { align: "center" });
+
+  // Elegant decorative line below name
+  doc.setDrawColor(220, 220, 220);
+  doc.setLineWidth(1);
+  doc.line(250, 245, 592, 245);
+
+  // --- 4. Topic Completion Statement ---
+  doc.setFont("Helvetica", "normal");
+  doc.setFontSize(16);
+  doc.setTextColor(102, 102, 102);
+  doc.text("for successfully mastering and completing the structured learning track on", 421, 285, { align: "center" });
+
+  doc.setFont("Helvetica", "bold");
+  doc.setFontSize(22);
+  doc.setTextColor(118, 75, 162);
+  doc.text(topicName, 421, 330, { align: "center" });
+
+  // --- 5. Footer Analytics (Date, Signatures, IDs) ---
+  // Date Field
+  doc.setFont("Helvetica", "normal");
+  doc.setFontSize(12);
+  doc.setTextColor(102, 102, 102);
+  doc.text(`Date of Completion: ${date}`, 100, 460);
+
+  // Verification Hash Stamp
+  doc.setFont("Courier", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(153, 153, 153);
+  doc.text(`Certificate ID: ${certId}`, 100, 480);
+
+  // Decorative Digital Board Seal/Signature Placeholder
+  doc.setDrawColor(118, 75, 162);
+  doc.line(600, 460, 720, 460);
+  doc.setFont("Helvetica", "italic");
+  doc.setFontSize(12);
+  doc.setTextColor(51, 51, 51);
+  doc.text("Authorized Platform Board", 660, 475, { align: "center" });
+
+  // Trigger browser download workflow natively
+  doc.save(`Certificate-${topicName.replace(/\s+/g, '-')}.pdf`);
+}
+
+/**
+ * Validates requirements and lists cert items on user history panel
+ */
+function renderCertificatesDashboard(tracks) {
+  const certListContainer = document.getElementById('certificates-list');
+  if (!certListContainer) return;
+  
+  certListContainer.innerHTML = ''; // clear out loading tags
+
+  tracks.forEach(track => {
+    const li = document.createElement('li');
+    li.style.display = 'flex';
+    li.style.justifyContent = 'space-between';
+    li.style.alignItems = 'center';
+    li.style.padding = '12px 15px';
+    li.style.marginBottom = '10px';
+    li.style.background = '#fafafa';
+    li.style.border = '1px solid #f0f0f0';
+    li.style.borderRadius = '6px';
+
+    // Verification check markup layout
+    const infoDiv = document.createElement('div');
+    infoDiv.innerHTML = `
+      <strong style="color:#333; font-size:15px;">${track.topicName} Roadmap</strong>
+      <div style="font-size:12px; color:#888; margin-top:2px;">
+        Completed: ${track.completionDate} | Status: <span style="color:#16a34a; font-weight:600;">✓ Verified</span>
+      </div>
+    `;
+
+    const downloadBtn = document.createElement('button');
+    downloadBtn.innerText = 'Download PDF';
+    downloadBtn.style.padding = '6px 12px';
+    downloadBtn.style.background = '#667eea';
+    downloadBtn.style.color = '#fff';
+    downloadBtn.style.border = 'none';
+    downloadBtn.style.borderRadius = '4px';
+    downloadBtn.style.cursor = 'pointer';
+    downloadBtn.style.fontSize = '12px';
+    downloadBtn.style.fontWeight = '600';
+
+    // Hook click action to client-side canvas renderer
+    downloadBtn.addEventListener('click', () => {
+      // Real-time verification safety wrapper
+      if (track.isCompleted) {
+        // Automatically uses structural records cleanly 
+        downloadCertificatePDF("Prasiddhi Mishra", track.topicName, track.completionDate, track.certificateId);
+      } else {
+        alert("This roadmap track is not fully completed yet.");
+      }
+    });
+
+    li.appendChild(infoDiv);
+    li.appendChild(downloadBtn);
+    certListContainer.appendChild(li);
+  });
+}
+
+// Mock completion database list for roadmaps
+const mockUserCompletedRoadmaps = [
+  { topicName: "Data Structures & Algorithms", isCompleted: true, completionDate: "2026-05-14", certificateId: "CERT-DSA-9941X" },
+  { topicName: "System Design Foundation", isCompleted: true, completionDate: "2026-06-20", certificateId: "CERT-SYS-2180Z" }
+];
+
+// Execute layout setup on dashboard load hook
+document.addEventListener('DOMContentLoaded', () => {
+  if (document.getElementById('certificates-dashboard')) {
+    renderCertificatesDashboard(mockUserCompletedRoadmaps);
+  }
+});
+
+// Function to update user interface metrics for Interview Readiness
+function renderReadinessDashboard(data) {
+  // Update numbers
+  document.getElementById('overall-score-badge').innerText = `${data.overallPercentage}%`;
+  document.getElementById('dsa-score').innerText = `${data.breakdown.dsa}%`;
+  document.getElementById('design-score').innerText = `${data.breakdown.systemDesign}%`;
+  document.getElementById('quiz-score').innerText = `${data.breakdown.interview}%`;
+
+  // Render Suggestions
+  const suggestionsList = document.getElementById('suggestions-list');
+  suggestionsList.innerHTML = ''; // clear out loading placeholder
+  data.suggestions.forEach(tip => {
+    const li = document.createElement('li');
+    li.style.fontSize = '14px';
+    li.style.color = '#444';
+    li.style.marginBottom = '8px';
+    li.innerHTML = `💡 ${tip}`;
+    suggestionsList.appendChild(li);
+  });
+
+  // Render Missing Topics
+  const tagsContainer = document.getElementById('missing-topics-tags');
+  tagsContainer.innerHTML = '';
+  data.missingTopics.forEach(topic => {
+    const span = document.createElement('span');
+    span.className = 'topic-tag';
+    span.innerText = `⚠️ ${topic}`;
+    tagsContainer.appendChild(span);
+  });
+}
+
+// Mocking data simulation (or replace URL with real backend fetch call if running)
+const dummyDataReport = {
+  overallPercentage: 74,
+  breakdown: { dsa: 80, systemDesign: 50, interview: 85 },
+  missingTopics: ['Microservices', 'System Design Basics', 'Graphs'],
+  suggestions: [
+    "Take more mock quizzes to boost your quick recall.",
+    "Focus on learning missing foundational topics: Microservices.",
+    "Try solving at least 2 DSA problems daily to hit your target."
+  ]
+};
+
+// Auto-run dashboard on load 
+document.addEventListener('DOMContentLoaded', () => {
+  if (document.getElementById('readiness-dashboard')) {
+     renderReadinessDashboard(dummyDataReport);
+  }
+});
+
+/**
+ * Saves the current page's bookmark details to browser local storage.
+ * Call this function whenever a user opens/navigates to a learning resource page or visualizer.
+ * @param {string} title - The title of the module or topic
+ * @param {string} category - e.g., 'DSA', 'System Design', 'Interview Prep'
+ * @param {string} relativeUrl - The file path or query string to load upon click
+ */
+function trackUserProgress(title, category, relativeUrl) {
+  const progressMetadata = {
+    title,
+    category,
+    relativeUrl,
+    timestamp: new Date().toLocaleString()
+  };
+  localStorage.setItem('last_visited_learning_page', JSON.stringify(progressMetadata));
+}
+
+/**
+ * Checks local storage for previous progress and loads the resume widget if data exists.
+ */
+function initResumeWidget() {
+  const widget = document.getElementById('resume-learning-widget');
+  const titleElem = document.getElementById('resume-page-title');
+  const categoryElem = document.getElementById('resume-page-category');
+  const timeElem = document.getElementById('resume-page-time');
+  const resumeBtn = document.getElementById('resume-learning-btn');
+
+  if (!widget) return;
+
+  const savedData = localStorage.getItem('last_visited_learning_page');
+
+  if (savedData) {
+    const progress = JSON.parse(savedData);
+
+    // Update UI elements with retrieved metadata
+    titleElem.innerText = progress.title;
+    categoryElem.innerText = progress.category;
+    timeElem.innerText = progress.timestamp;
+
+    // Display widget card reactively
+    widget.style.display = 'block';
+
+    // Hook up click functionality to redirect user
+    resumeBtn.onclick = () => {
+      window.location.href = progress.relativeUrl;
+    };
+  } else {
+    widget.style.display = 'none';
+  }
+}
+
+// Simulated Tracker Event: Let's log a baseline entry if no history exists for demonstration purposes
+document.addEventListener('DOMContentLoaded', () => {
+  // If the user is checking out the dashboard for the first time, mock an active track
+  if (!localStorage.getItem('last_visited_learning_page')) {
+    trackUserProgress("Graph Traversals (BFS & DFS)", "Data Structures & Algorithms", "#graph-visualizer");
+  }
+
+  // Initialize and check layout visibility rules
+  initResumeWidget();
+});
+

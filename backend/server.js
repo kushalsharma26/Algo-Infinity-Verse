@@ -11,6 +11,7 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const MEMORY_FILE = path.join(DATA_DIR, "memory.json");
+const TEAM_PROFILES_FILE = path.join(DATA_DIR, "team_profiles.json");
 const SESSION_COOKIE = "aiv_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const PBKDF2_ITERATIONS = 210000;
@@ -510,24 +511,69 @@ async function writeMemoryStoreAtomic(filePath, store) {
 
 // Serializes read-modify-write cycles so concurrent /api/memory/* requests
 // cannot clobber each other's updates. `mutator` receives the current store
-// and must return the updated store.
+// and must return the updated store (or modify it in-place).
 async function updateMemoryStore(mutator) {
   const task = memoryWriteQueue.then(async () => {
     await ensureMemoryStore();
     const raw = await fs.readFile(MEMORY_FILE, "utf8");
     const store = JSON.parse(raw || "{}");
     const updated = await mutator(store);
-    await writeMemoryStoreAtomic(MEMORY_FILE, store);
+    // Write the updated store if the mutator returned a new store object.
+    // If the mutator mutated in-place and returned undefined or a sub-resource
+    // (such as a card object), we write the mutated store.
+    const isCard = updated && typeof updated === "object" && ("topic" in updated || "nextReviewDate" in updated || "repetitions" in updated);
+    const isNewStore = updated && typeof updated === "object" && !isCard;
+    const storeToSave = isNewStore && updated !== store ? updated : store;
+    await writeMemoryStoreAtomic(MEMORY_FILE, storeToSave);
     return updated;
   });
 
-  // Prevent one rejected task from permanently breaking the queue.
   // Prevent one rejected task from permanently breaking the queue.
   memoryWriteQueue = task.catch((err) => {
     console.error("[updateMemoryStore] Write task failed:", err);
   });
   return task;
 }
+
+let teamProfilesWriteQueue = Promise.resolve();
+
+async function ensureTeamProfilesStore() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try {
+    await fs.access(TEAM_PROFILES_FILE);
+  } catch {
+    await fs.writeFile(TEAM_PROFILES_FILE, "{}\n");
+  }
+}
+
+async function readTeamProfilesStore() {
+  await ensureTeamProfilesStore();
+  const raw = await fs.readFile(TEAM_PROFILES_FILE, "utf8");
+  return JSON.parse(raw || "{}");
+}
+
+async function writeTeamProfilesStoreAtomic(filePath, store) {
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`);
+  await fs.rename(tmpPath, filePath);
+}
+
+async function updateTeamProfilesStore(mutator) {
+  const task = teamProfilesWriteQueue.then(async () => {
+    await ensureTeamProfilesStore();
+    const raw = await fs.readFile(TEAM_PROFILES_FILE, "utf8");
+    const store = JSON.parse(raw || "{}");
+    const updated = await mutator(store);
+    await writeTeamProfilesStoreAtomic(TEAM_PROFILES_FILE, store);
+    return updated;
+  });
+
+  teamProfilesWriteQueue = task.catch((err) => {
+    console.error("[updateTeamProfilesStore] Write task failed:", err);
+  });
+  return task;
+}
+
 // SM-2 algorithm: quality is 0-5 (0 = total blackout, 5 = perfect recall)
 function applySM2(card, quality) {
   const q = Math.max(0, Math.min(5, Number(quality)));
@@ -701,6 +747,162 @@ function validateRequest(req) {
 }
 
 async function handleApi(req, res, pathname) {
+  if (pathname === "/api/log-error" && req.method === "POST") {
+    try {
+      const payload = await readJsonBody(req);
+      const logFile = path.join(DATA_DIR, "client_errors.json");
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      let currentLogs = [];
+      try {
+        const raw = await fs.readFile(logFile, "utf8");
+        currentLogs = JSON.parse(raw || "[]");
+      } catch (e) {
+        // file might not exist
+      }
+      currentLogs.push(payload);
+      await fs.writeFile(logFile, `${JSON.stringify(currentLogs, null, 2)}\n`);
+      return sendJson(res, 200, { success: true });
+    } catch (err) {
+      console.error("Error logging client error:", err);
+      return sendJson(res, 500, { error: "Failed to log error" });
+    }
+  }
+
+  if (pathname === "/api/team-profile" && req.method === "GET") {
+    try {
+      const urlParams = new URL(req.url, `http://${req.headers.host}`).searchParams;
+      const teamId = urlParams.get("id");
+      
+      if (!teamId) {
+        return sendJson(res, 400, { error: "Missing team id." });
+      }
+
+      let profileData = null;
+
+      if (!useFirestore) {
+        const store = await readTeamProfilesStore();
+        profileData = store[teamId] || null;
+      } else {
+        const docRef = db.collection(COLLECTIONS.TEAM_PROFILES).doc(teamId);
+        const snapshot = await docRef.get();
+        if (snapshot.exists) {
+          profileData = snapshot.data();
+        }
+      }
+
+      if (!profileData) {
+        // Return default profile with version 1
+        return sendJson(res, 200, {
+          id: teamId,
+          version: 1,
+          name: "New Team Profile",
+          description: "",
+          members: []
+        });
+      }
+
+      return sendJson(res, 200, profileData);
+    } catch (error) {
+      console.error("Fetch team profile error:", error);
+      return sendJson(res, 500, { error: "Failed to fetch team profile." });
+    }
+  }
+
+  if (pathname === "/api/team-profile" && req.method === "POST") {
+    try {
+      const payload = await readJsonBody(req);
+      const { id: teamId, version, name, description, members } = payload;
+
+      if (!teamId) {
+        return sendJson(res, 400, { error: "Missing team id." });
+      }
+
+      if (version === undefined || version === null) {
+        return sendJson(res, 400, { error: "Missing version for concurrency control." });
+      }
+
+      let updatedProfile = null;
+
+      if (!useFirestore) {
+        try {
+          updatedProfile = await updateTeamProfilesStore(store => {
+            const currentProfile = store[teamId] || { version: 1 };
+            
+            // OCC version check
+            if (currentProfile.version !== version) {
+              const conflictError = new Error("Conflict");
+              conflictError.status = 409;
+              conflictError.currentVersion = currentProfile.version;
+              throw conflictError;
+            }
+
+            // Update data and increment version
+            const newProfile = {
+              id: teamId,
+              name: name || currentProfile.name || "New Team Profile",
+              description: description !== undefined ? description : (currentProfile.description || ""),
+              members: members || currentProfile.members || [],
+              version: version + 1,
+              updatedAt: new Date().toISOString()
+            };
+
+            store[teamId] = newProfile;
+            return newProfile;
+          });
+        } catch (error) {
+          if (error.status === 409) {
+            return sendJson(res, 409, { 
+              error: "Conflict detected: The profile was updated by someone else.",
+              currentVersion: error.currentVersion
+            });
+          }
+          throw error;
+        }
+      } else {
+        const docRef = db.collection(COLLECTIONS.TEAM_PROFILES).doc(teamId);
+        try {
+          updatedProfile = await db.runTransaction(async (transaction) => {
+            const doc = await transaction.get(docRef);
+            
+            const currentVersion = doc.exists ? doc.data().version : 1;
+
+            if (currentVersion !== version) {
+              const conflictError = new Error("Conflict");
+              conflictError.status = 409;
+              conflictError.currentVersion = currentVersion;
+              throw conflictError;
+            }
+
+            const newProfile = {
+              id: teamId,
+              name: name || (doc.exists ? doc.data().name : "New Team Profile"),
+              description: description !== undefined ? description : (doc.exists ? doc.data().description : ""),
+              members: members || (doc.exists ? doc.data().members : []),
+              version: version + 1,
+              updatedAt: new Date().toISOString()
+            };
+
+            transaction.set(docRef, newProfile);
+            return newProfile;
+          });
+        } catch (error) {
+          if (error.status === 409) {
+            return sendJson(res, 409, { 
+              error: "Conflict detected: The profile was updated by someone else.",
+              currentVersion: error.currentVersion
+            });
+          }
+          throw error;
+        }
+      }
+
+      return sendJson(res, 200, updatedProfile);
+    } catch (error) {
+      console.error("Update team profile error:", error);
+      return sendJson(res, 500, { error: "Failed to update team profile." });
+    }
+  }
+
   if (pathname === "/api/analyze-resume" && req.method === "POST") {
     try {
       await new Promise((resolve, reject) => {
@@ -1175,6 +1377,63 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  if (pathname === "/api/recommendations/next" && req.method === "GET") {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: "Login required." });
+
+    try {
+      const store = await readMemoryStore();
+      const userCards = store[session.sub] || {};
+      
+      const now = new Date();
+      // Find cards due for review
+      const dueCards = Object.values(userCards).filter(
+        (card) => new Date(card.nextReviewDate) <= now
+      );
+      
+      // Sort by SM-2 quality (lowest first) to prioritize weak areas
+      const weakCards = Object.values(userCards).sort((a, b) => a.quality - b.quality);
+      
+      let recommendedTopic = null;
+      let reason = "";
+
+      if (dueCards.length > 0) {
+        dueCards.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
+        recommendedTopic = dueCards[0].topic;
+        reason = `Based on your spaced repetition schedule, it's time to review ${recommendedTopic}.`;
+      } else if (weakCards.length > 0 && weakCards[0].quality < 4) {
+        recommendedTopic = weakCards[0].topic;
+        reason = `Your performance in ${recommendedTopic} indicates it's a weak area. We recommend practicing it.`;
+      } else {
+        recommendedTopic = "dp";
+        reason = "You're doing great! Keep pushing your boundaries with some advanced problems.";
+      }
+
+      // Generate AI tip
+      let aiTip = "";
+      try {
+        const { generateTopicMarkdown } = await import("./knowledge-base/llmClient.js");
+        if (generateTopicMarkdown) {
+          aiTip = `AI Insight: Mastering ${recommendedTopic} will significantly improve your overall problem-solving skills.`;
+        }
+      } catch (err) {
+        console.warn("LLM client not available for tip generation.");
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        recommendation: {
+          topic: recommendedTopic,
+          reason: reason,
+          aiTip: aiTip
+        }
+      });
+    } catch (err) {
+      console.error("Error generating recommendation:", err);
+      return sendJson(res, 500, { error: "Failed to generate recommendation." });
+    }
+  }
+
   return sendJson(res, 404, { error: "Not found." });
 }
 
@@ -1258,11 +1517,39 @@ async function serveStatic(req, res, pathname) {
       ? path.join(filePath, "index.html")
       : filePath;
     const ext = path.extname(target);
-    const content = await fs.readFile(target);
-    res.writeHead(200, {
-      "Content-Type": mimeTypes[ext] || "application/octet-stream",
+    let content = await fs.readFile(target);
+
+    const headers = {
       "X-Content-Type-Options": "nosniff",
-    });
+      "X-Frame-Options": "SAMEORIGIN",
+      "X-XSS-Protection": "1; mode=block",
+      "Referrer-Policy": "strict-origin-when-cross-origin",
+      "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+    };
+
+    if (ext === ".html") {
+      // Generate a dynamic nonce for CSP script elements
+      const nonce = crypto.randomBytes(16).toString("base64");
+      
+      // Inject nonce into script tags in the HTML content
+      let htmlStr = content.toString("utf-8");
+      htmlStr = htmlStr.replace(/<script(\s|>)/gi, `<script nonce="${nonce}"$1`);
+      content = Buffer.from(htmlStr, "utf-8");
+
+      headers["Content-Security-Policy"] = 
+        `default-src 'self'; ` +
+        `script-src 'self' 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://apis.google.com; ` +
+        `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; ` +
+        `font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; ` +
+        `img-src 'self' data: https: blob:; ` +
+        `connect-src 'self' https: wss:; ` +
+        `frame-src 'self' https://*.firebaseapp.com; ` +
+        `object-src 'none'; ` +
+        `base-uri 'self';`;
+    }
+
+    headers["Content-Type"] = mimeTypes[ext] || "application/octet-stream";
+    res.writeHead(200, headers);
     res.end(content);
   } catch {
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -1304,7 +1591,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-export { server };
+export { server, updateMemoryStore, readMemoryStore };
 if (process.env.VERCEL === "1") {
   db = initializeFirebase();
   useFirestore = !!db;

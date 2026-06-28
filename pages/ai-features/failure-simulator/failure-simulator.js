@@ -179,25 +179,53 @@ public class Solution {
 `
     },
     'valid-parentheses': {
-      python: `def isValid(s):
-    # Verify s contains matching brackets
-    # Examples: "()[]{}", "({[]})"
+      python: `def is_valid(brackets):
+    # brackets: string of '()', '{}', '[]' characters
+    # returns: True if every opening bracket has a matching closing
+    #          bracket in the correct order, False otherwise
+    #
+    # Use a stack to track opening brackets.
+    # For each char in brackets:
+    #   - If it's an opening bracket, push onto stack
+    #   - If it's a closing bracket, pop from stack and check it matches
+    # Examples:
+    #   is_valid("()[]{}") -> True
+    #   is_valid("(]")     -> False
     pass
 `,
-      javascript: `function isValid(s) {
-    // Verify s contains matching brackets
-    // Examples: "()[]{}", "({[]})"
+      javascript: `function isValid(brackets) {
+    // brackets: string of '()', '{}', '[]' characters
+    // returns: true if every opening bracket has a matching closing
+    //          bracket in the correct order, false otherwise
+    //
+    // Use a stack to track opening brackets.
+    // For each char in brackets:
+    //   - If it's an opening bracket, push onto stack
+    //   - If it's a closing bracket, pop from stack and check it matches
+    // Examples:
+    //   isValid("()[]{}") -> true
+    //   isValid("(]")     -> false
     return false;
 }
 `,
       cpp: `#include <string>
+#include <stack>
 using namespace std;
 
 class Solution {
 public:
-    bool isValid(string s) {
-        // Verify s contains matching brackets
-        // Examples: "()[]{}", "({[]})"
+    bool isValid(string brackets) {
+        // brackets: string of '()', '{}', '[]' characters
+        // returns: true if every opening bracket has a matching closing
+        //          bracket in the correct order, false otherwise
+        //
+        // Use a stack to track opening brackets.
+        // For each char in brackets:
+        //   - If it's an opening bracket, push onto stack
+        //   - If it's a closing bracket, pop from stack and check it matches
+        // Examples:
+        //   isValid("()[]{}") -> true
+        //   isValid("(]")     -> false
         return false;
     }
 };
@@ -205,9 +233,18 @@ public:
       java: `import java.util.*;
 
 public class Solution {
-    public boolean isValid(String s) {
-        // Verify s contains matching brackets
-        // Examples: "()[]{}", "({[]})"
+    public boolean isValid(String brackets) {
+        // brackets: string of '()', '{}', '[]' characters
+        // returns: true if every opening bracket has a matching closing
+        //          bracket in the correct order, false otherwise
+        //
+        // Use a stack to track opening brackets.
+        // For each char in brackets:
+        //   - If it's an opening bracket, push onto stack
+        //   - If it's a closing bracket, pop from stack and check it matches
+        // Examples:
+        //   isValid("()[]{}") -> true
+        //   isValid("(]")     -> false
         return false;
     }
 }
@@ -600,13 +637,19 @@ public:
     }
     
     if (currentProblemKey === 'valid-parentheses') {
-      const usesStack = /stack|push|pop|shift|unshift|\[\s*\]/.test(text);
-      if (!usesStack) return { compiled: true, passed: false, errorMsg: "LogicalError: Expected linear helper structure for nested bracket mapping." };
-      
+      const usesStack = /\b(push|pop)\b/.test(text) || /\b(stack|Stack)\b/.test(code);
+      if (!usesStack) return { compiled: true, passed: false, errorMsg: "LogicalError: Use a stack (push/pop) to track opening brackets and validate nesting order." };
+
+      const hasBracketMap = /\(|\)|\{|\}|\[|\]/.test(code);
+      if (!hasBracketMap) return { compiled: true, passed: false, errorMsg: "LogicalError: No bracket characters found. Expected logic to match parentheses '()', '{}', '[]'." };
+
+      const checksEmpty = /\b(length|size|len|empty|isEmpty)\b/.test(text);
+      if (!checksEmpty) return { compiled: true, passed: false, errorMsg: "IndexOutOfBoundsError: Stack underflow risk — check for empty stack before popping." };
+
       if (stressorEdge.checked) {
-        const oddLengthCheck = /len|length|size|%/.test(text);
+        const oddLengthCheck = /\b(length|size|len)\b/.test(text) && /%/.test(text);
         if (!oddLengthCheck) {
-          return { compiled: true, passed: false, errorMsg: "AssertionError: Failed on odd-length string input '(([' (expected false)." };
+          return { compiled: true, passed: false, errorMsg: "PerformanceWarning: Odd-length strings can never be valid — add early exit when brackets.length % 2 !== 0." };
         }
       }
       return { compiled: true, passed: true };

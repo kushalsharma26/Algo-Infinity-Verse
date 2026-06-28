@@ -13,17 +13,31 @@ import { analyzeWorkflow } from "./backend/repository-analyzer/cicdValidator.js"
 import { VCSFactory } from "./backend/vcs/VCSFactory.js";
 import { enqueueBulkAudit, getBatchProgress } from "./backend/jobs/queue.js";
 import "./backend/jobs/worker.js"; // Initialize worker
+
 import { parse as csvParse } from "csv-parse/sync";
 import { v4 as uuidv4 } from "uuid";
+import { generateSdlcAdvice } from "./sdlcAdvisor.js";
 import { handleReportRequest } from "./backend/reports/reportGenerator.js";
 import { getUserBenchmark } from "./backend/benchmarking/percentileService.js";
 import { Server as SocketIOServer } from "socket.io";
 import { 
-  SESSION_MAX_AGE_SECONDS, getClientIdentifier, isSignupRateLimited, 
-  recordSignupAttempt, normalizeAuthDelay, createSessionToken, 
-  verifySessionToken, hashPassword, passwordMatches, validateSignup 
+  ACCESS_TOKEN_MAX_AGE_SECONDS, getClientIdentifier, isSignupRateLimited, 
+  recordSignupAttempt, normalizeAuthDelay, createAccessToken, 
+  verifyAccessToken, hashPassword, passwordMatches, validateSignup,
+  createRefreshToken, verifyRefreshToken, revokeTokenFamily,
+  activeRefreshFamilies
 } from "./backend/services/auth.service.js";
+import {
+  applyRateLimit,
+  loginLimiter,
+  signupLimiter,
+  forgotPasswordLimiter,
+  changePasswordLimiter,
+  deleteAccountLimiter,
+  resendVerificationLimiter
+} from "./backend/utils/rateLimiter.js";
 import { applySM2 } from "./backend/services/memory.service.js";
+import { sendVerificationEmail } from "./backend/services/email.service.js";
 import {
   createBattle,
   joinBattle,
@@ -32,8 +46,30 @@ import {
   getHistory,
 } from "./pages/Dsa-Battle/Battleservice.js";
 
-const upload = multer({ storage: multer.memoryStorage() }).single("resume");
-const uploadCsv = multer({ storage: multer.memoryStorage() }).single("csv");
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+}).single("resume");
+const uploadCsv = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 } // 2MB limit
+}).single("csv");
+
+function validateMagicBytes(buffer, mimeType) {
+  if (!buffer || buffer.length < 4) return false;
+  const hex = buffer.slice(0, 4).toString("hex").toUpperCase();
+  
+  if (mimeType === "application/pdf") {
+    return hex === "25504446";
+  }
+  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    return hex === "504B0304";
+  }
+  if (mimeType === "application/msword") {
+    return hex === "D0CF11E0";
+  }
+  return false;
+}
 const userSocketMap = new Map();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,8 +77,11 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const MEMORY_FILE = path.join(DATA_DIR, "memory.json");
+const TEAM_PROFILES_FILE = path.join(DATA_DIR, "team_profiles.json");
 const AUDITS_FILE = path.join(DATA_DIR, "audits_history.json");
 const SESSION_COOKIE = "aiv_session";
+const ACCESS_COOKIE = "aiv_access";
+const REFRESH_COOKIE = "aiv_refresh";
 
 const DELETION_LOG_FILE = path.join(
   DATA_DIR,
@@ -111,21 +150,26 @@ function parseCookies(cookieHeader = "") {
   }, {});
 }
 
-function sessionCookie(token, req) {
+function getRefreshToken(req) {
+  const cookies = parseCookies(req.headers.cookie || "");
+  return cookies[REFRESH_COOKIE] || null;
+}
+
+function authCookies(token, req) {
   const secure = req.headers["x-forwarded-proto"] === "https";
   return [
     `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
     "HttpOnly",
     "SameSite=Lax",
     "Path=/",
-    `Max-Age=${SESSION_MAX_AGE_SECONDS}`,
+    `Max-Age=${ACCESS_TOKEN_MAX_AGE_SECONDS}`,
     secure ? "Secure" : "",
   ]
     .filter(Boolean)
     .join("; ");
 }
 
-function clearSessionCookie() {
+function clearAuthCookies() {
   return `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
 }
 
@@ -228,14 +272,20 @@ async function writeMemoryStoreAtomic(filePath, store) {
 
 // Serializes read-modify-write cycles so concurrent /api/memory/* requests
 // cannot clobber each other's updates. `mutator` receives the current store
-// and must return the updated store.
+// and must return the updated store (or modify it in-place).
 async function updateMemoryStore(mutator) {
   const task = memoryWriteQueue.then(async () => {
     await ensureMemoryStore();
     const raw = await fs.readFile(MEMORY_FILE, "utf8");
     const store = JSON.parse(raw || "{}");
     const updated = await mutator(store);
-    await writeMemoryStoreAtomic(MEMORY_FILE, store);
+    // Write the updated store if the mutator returned a new store object.
+    // If the mutator mutated in-place and returned undefined or a sub-resource
+    // (such as a card object), we write the mutated store.
+    const isCard = updated && typeof updated === "object" && ("topic" in updated || "nextReviewDate" in updated || "repetitions" in updated);
+    const isNewStore = updated && typeof updated === "object" && !isCard;
+    const storeToSave = isNewStore && updated !== store ? updated : store;
+    await writeMemoryStoreAtomic(MEMORY_FILE, storeToSave);
     return updated;
   });
 
@@ -243,6 +293,46 @@ async function updateMemoryStore(mutator) {
   memoryWriteQueue = task.catch(() => {});
   return task;
 }
+
+let teamProfilesWriteQueue = Promise.resolve();
+
+async function ensureTeamProfilesStore() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try {
+    await fs.access(TEAM_PROFILES_FILE);
+  } catch {
+    await fs.writeFile(TEAM_PROFILES_FILE, "{}\n");
+  }
+}
+
+async function readTeamProfilesStore() {
+  await ensureTeamProfilesStore();
+  const raw = await fs.readFile(TEAM_PROFILES_FILE, "utf8");
+  return JSON.parse(raw || "{}");
+}
+
+async function writeTeamProfilesStoreAtomic(filePath, store) {
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`);
+  await fs.rename(tmpPath, filePath);
+}
+
+async function updateTeamProfilesStore(mutator) {
+  const task = teamProfilesWriteQueue.then(async () => {
+    await ensureTeamProfilesStore();
+    const raw = await fs.readFile(TEAM_PROFILES_FILE, "utf8");
+    const store = JSON.parse(raw || "{}");
+    const updated = await mutator(store);
+    await writeTeamProfilesStoreAtomic(TEAM_PROFILES_FILE, store);
+    return updated;
+  });
+
+  teamProfilesWriteQueue = task.catch((err) => {
+    console.error("[updateTeamProfilesStore] Write task failed:", err);
+  });
+  return task;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 
 async function readJsonBody(req) {
@@ -272,7 +362,7 @@ function redirect(res, location, headers = {}) {
 
 function getSession(req) {
   const cookies = parseCookies(req.headers.cookie || "");
-  return verifySessionToken(cookies[SESSION_COOKIE]);
+  return verifyAccessToken(cookies[SESSION_COOKIE]);
 }
 
 function normalizePathname(pathname) {
@@ -318,6 +408,254 @@ function validateRequest(req) {
 }
 
 async function handleApi(req, res, pathname) {
+  if (pathname === "/api/log-error" && req.method === "POST") {
+    try {
+      const payload = await readJsonBody(req);
+      const logFile = path.join(DATA_DIR, "client_errors.json");
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      let currentLogs = [];
+      try {
+        const raw = await fs.readFile(logFile, "utf8");
+        currentLogs = JSON.parse(raw || "[]");
+      } catch (e) {
+        // file might not exist
+      }
+      currentLogs.push(payload);
+      await fs.writeFile(logFile, `${JSON.stringify(currentLogs, null, 2)}\n`);
+      return sendJson(res, 200, { success: true });
+    } catch (err) {
+      console.error("Error logging client error:", err);
+      return sendJson(res, 500, { error: "Failed to log error" });
+    }
+  }
+  
+  if (pathname === "/api/execute" && req.method === "POST") {
+    try {
+     
+      const payload = await readJsonBody(req);
+      const { sourceCode, language, stdin } = payload;
+      const session = getSession(req);
+      if (!session) {
+        return sendJson(res, 401, {
+          success: false,
+          message: "Authentication required.",
+        });
+      }
+     
+      let payload;
+      try {
+        payload = await readJsonBody(req);
+      } catch (err) {
+        const tooLarge = err?.message === "Request body is too large.";
+        return sendJson(res, tooLarge ? 413 : 400, {
+          success: false,
+          message: tooLarge ? "Request body is too large." : "Invalid JSON body.",
+        });
+      }
+      const sourceCode = payload.sourceCode ?? payload.source_code;
+      const { language, stdin } = payload;
+
+      if (
+        typeof sourceCode !== "string" ||
+        !sourceCode.trim() ||
+        typeof language !== "string" ||
+        !language.trim()
+      ) {
+        return sendJson(res, 400, { success: false, message: 'Source code and language are required.' });
+      }
+
+      if (!sourceCode || !language) {
+        return sendJson(res, 400, { success: false, message: 'Source code and language are required.' });
+      }
+
+      const languageMap = {
+        'javascript': { lang: 'nodejs', version: '4' },
+        'python': { lang: 'python3', version: '3' },
+        'cpp': { lang: 'cpp17', version: '0' },
+        'java': { lang: 'java', version: '4' }
+      };
+
+      const targetLang = languageMap[language.toLowerCase()];
+
+      if (!targetLang) {
+         return sendJson(res, 400, { success: false, message: 'Unsupported language.' });
+      }
+
+      // JDoodle API call
+      const response = await fetch('https://api.jdoodle.com/v1/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              clientId: process.env.JDOODLE_CLIENT_ID,
+              clientSecret: process.env.JDOODLE_CLIENT_SECRET,
+              script: sourceCode,
+              language: targetLang.lang,
+              versionIndex: targetLang.version,
+              stdin: stdin || ""
+          })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+          console.error("JDoodle API Error:", data);
+          return sendJson(res, 500, { 
+              success: false, 
+              message: 'Compiler API error', 
+              details: data 
+          });
+      }
+
+     
+      return sendJson(res, 200, {
+          success: true,
+          data: {
+              output: data.output,
+              memory: data.memory,
+              cpuTime: data.cpuTime
+          }
+      });
+    } catch (error) {
+        console.error('Server Execution Error:', error);
+        return sendJson(res, 500, { success: false, message: 'Internal server proxy error.' });
+    }
+  }
+
+  if (pathname === "/api/team-profile" && req.method === "GET") {
+    try {
+      const urlParams = new URL(req.url, `http://${req.headers.host}`).searchParams;
+      const teamId = urlParams.get("id");
+      
+      if (!teamId) {
+        return sendJson(res, 400, { error: "Missing team id." });
+      }
+
+      let profileData = null;
+
+      if (!useFirestore) {
+        const store = await readTeamProfilesStore();
+        profileData = store[teamId] || null;
+      } else {
+        const docRef = db.collection(COLLECTIONS.TEAM_PROFILES).doc(teamId);
+        const snapshot = await docRef.get();
+        if (snapshot.exists) {
+          profileData = snapshot.data();
+        }
+      }
+
+      if (!profileData) {
+        // Return default profile with version 1
+        return sendJson(res, 200, {
+          id: teamId,
+          version: 1,
+          name: "New Team Profile",
+          description: "",
+          members: []
+        });
+      }
+
+      return sendJson(res, 200, profileData);
+    } catch (error) {
+      console.error("Fetch team profile error:", error);
+      return sendJson(res, 500, { error: "Failed to fetch team profile." });
+    }
+  }
+
+  if (pathname === "/api/team-profile" && req.method === "POST") {
+    try {
+      const payload = await readJsonBody(req);
+      const { id: teamId, version, name, description, members } = payload;
+
+      if (!teamId) {
+        return sendJson(res, 400, { error: "Missing team id." });
+      }
+
+      if (version === undefined || version === null) {
+        return sendJson(res, 400, { error: "Missing version for concurrency control." });
+      }
+
+      let updatedProfile = null;
+
+      if (!useFirestore) {
+        try {
+          updatedProfile = await updateTeamProfilesStore(store => {
+            const currentProfile = store[teamId] || { version: 1 };
+            
+            // OCC version check
+            if (currentProfile.version !== version) {
+              const conflictError = new Error("Conflict");
+              conflictError.status = 409;
+              conflictError.currentVersion = currentProfile.version;
+              throw conflictError;
+            }
+
+            // Update data and increment version
+            const newProfile = {
+              id: teamId,
+              name: name || currentProfile.name || "New Team Profile",
+              description: description !== undefined ? description : (currentProfile.description || ""),
+              members: members || currentProfile.members || [],
+              version: version + 1,
+              updatedAt: new Date().toISOString()
+            };
+
+            store[teamId] = newProfile;
+            return newProfile;
+          });
+        } catch (error) {
+          if (error.status === 409) {
+            return sendJson(res, 409, { 
+              error: "Conflict detected: The profile was updated by someone else.",
+              currentVersion: error.currentVersion
+            });
+          }
+          throw error;
+        }
+      } else {
+        const docRef = db.collection(COLLECTIONS.TEAM_PROFILES).doc(teamId);
+        try {
+          updatedProfile = await db.runTransaction(async (transaction) => {
+            const doc = await transaction.get(docRef);
+            
+            const currentVersion = doc.exists ? doc.data().version : 1;
+
+            if (currentVersion !== version) {
+              const conflictError = new Error("Conflict");
+              conflictError.status = 409;
+              conflictError.currentVersion = currentVersion;
+              throw conflictError;
+            }
+
+            const newProfile = {
+              id: teamId,
+              name: name || (doc.exists ? doc.data().name : "New Team Profile"),
+              description: description !== undefined ? description : (doc.exists ? doc.data().description : ""),
+              members: members || (doc.exists ? doc.data().members : []),
+              version: version + 1,
+              updatedAt: new Date().toISOString()
+            };
+
+            transaction.set(docRef, newProfile);
+            return newProfile;
+          });
+        } catch (error) {
+          if (error.status === 409) {
+            return sendJson(res, 409, { 
+              error: "Conflict detected: The profile was updated by someone else.",
+              currentVersion: error.currentVersion
+            });
+          }
+          throw error;
+        }
+      }
+
+      return sendJson(res, 200, updatedProfile);
+    } catch (error) {
+      console.error("Update team profile error:", error);
+      return sendJson(res, 500, { error: "Failed to update team profile." });
+    }
+  }
+
   if (
     pathname === "/api/debug-env" &&
     req.method === "GET" &&
@@ -365,6 +703,19 @@ async function handleApi(req, res, pathname) {
 
       if (!req.file) {
         return sendJson(res, 400, { error: "No resume file uploaded." });
+      }
+
+      const allowedMimeTypes = [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword"
+      ];
+      if (!allowedMimeTypes.includes(req.file.mimetype)) {
+        return sendJson(res, 400, { error: "Unsupported file type. Upload PDF or DOCX." });
+      }
+
+      if (!validateMagicBytes(req.file.buffer, req.file.mimetype)) {
+        return sendJson(res, 400, { error: "File content mismatch. The uploaded file's content does not match its type." });
       }
 
       const text = await extractResumeText(req.file);
@@ -443,6 +794,22 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // SDLC Advisor API
+  if (pathname === "/api/sdlc-advisor" && req.method === "POST") {
+    try {
+      const payload = await readJsonBody(req);
+      const { description } = payload;
+      if (!description) {
+        return sendJson(res, 400, { error: "Project description is required." });
+      }
+      const advice = await generateSdlcAdvice(description);
+      return sendJson(res, 200, advice);
+    } catch (e) {
+      console.error("SDLC Advisor error:", e);
+      return sendJson(res, 500, { error: "Failed to generate SDLC advice." });
+    }
+  }
+
   // Bulk Audit APIs
   if (pathname === "/api/audit/bulk" && req.method === "POST") {
     try {
@@ -487,61 +854,86 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, progress);
   }
 
-  if (pathname === "/api/session" && req.method === "GET") {
+
+  if (pathname === "/api/logout" && req.method === "POST") {
+    const rToken = getRefreshToken(req);
+    if (rToken) {
+      const decoded = verifyRefreshToken(rToken);
+      if (decoded) revokeTokenFamily(decoded.familyId);
+    }
+    return sendJson(res, 200, { success: true }, { "Set-Cookie": clearAuthCookies() });
+  }
+
+  if (pathname === "/api/refresh" && req.method === "POST") {
+    const rToken = getRefreshToken(req);
+    if (!rToken) return sendJson(res, 401, { error: "No refresh token" });
+    
+    const decoded = verifyRefreshToken(rToken);
+    if (!decoded) return sendJson(res, 401, { error: "Invalid or expired refresh token" }, { "Set-Cookie": clearAuthCookies() });
+    revokeTokenFamily(decoded.familyId);
+
+    // Find user
+    const users = useFirestore ? [] : await readUsers();
+    let user;
+    if (useFirestore) {
+      user = await getUserByEmail(decoded.email);
+      if (!user) {
+        try {
+          const snapshot = await db.collection("users").doc(decoded.sub).get();
+          if (snapshot.exists) user = { ...snapshot.data(), id: snapshot.id };
+        } catch(e) {}
+      }
+    } else {
+      user = users.find(u => u.id === decoded.sub);
+    }
+
+    if (!user) return sendJson(res, 401, { error: "User not found" }, { "Set-Cookie": clearAuthCookies() });
+
+    const accessToken = createAccessToken(user);
+    const refreshToken = createRefreshToken(user, decoded.familyId);
+    
+    return sendJson(res, 200, { success: true }, { "Set-Cookie": authCookies(accessToken, refreshToken, req) });
+  }
+
+if (pathname === "/api/session" && req.method === "GET") {
     const session = getSession(req);
+    
+    
+    if (!session) {
+      return sendJson(res, 200, { authenticated: false, user: null });
+    }
+    
+    if (!session) {
+      return sendJson(res, 200, { authenticated: false, user: null });
+    }
     return sendJson(res, 200, {
-      authenticated: Boolean(session),
-      user: session,
+      authenticated: true,
+      user: {
+        id: session.sub,
+        name: session.name,
+        sub: session.sub,
+        email: session.email,
+      },
     });
   }
 
   if (pathname === "/api/signup" && req.method === "POST") {
-    // In serverless environments without Firestore, file-based storage won't work
-    if (!useFirestore) {
-      return sendJson(res, 503, {
-        error: "User accounts require Firebase Firestore in serverless mode. Please configure FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY environment variables."
-      });
+    if (!applyRateLimit(req, res, signupLimiter, "Too many signup attempts. Please try again later.")) {
+      return;
     }
-
-    // ── Rate limit check ─────────────────────────────────────────────────────
-    const clientId = getClientIdentifier(req);
-
-    if (isSignupRateLimited(clientId)) {
-      await normalizeAuthDelay();
-      return sendJson(res, 429, {
-        error: "Too many signup attempts. Please try again later.",
-      });
-    }
-
-    // Record the attempt before processing so every inbound request counts,
-    // including those that fail validation or find a duplicate email.
-    recordSignupAttempt(clientId);
-    // ─────────────────────────────────────────────────────────────────────────
 
     const payload = await readJsonBody(req);
     const validationError = validateSignup(payload);
     if (validationError) return sendJson(res, 400, { error: validationError });
 
     const email = String(payload.email).trim().toLowerCase();
-    const existing = useFirestore
-      ? await getUserByEmail(email)
-      : (await readUsers()).find((user) => user.email === email);
+    const existing = await getUserByEmail(email);
     if (existing) {
-      // Normalize response time so a duplicate is indistinguishable from a
-      // real signup by timing — a real signup always runs PBKDF2 before
-      // responding, so we must delay here to match that latency profile.
       await normalizeAuthDelay();
-      console.warn("[signup] duplicate email attempt", {
-        email,
-        ip: clientId,
-        at: new Date().toISOString(),
-      });
-      // Return a generic 200 that is indistinguishable from a real signup
-      // success so callers cannot enumerate registered email addresses.
-      // No session cookie is issued — the submitter has not authenticated.
       return sendJson(res, 200, { ok: true });
     }
 
+    const verifyToken = crypto.randomBytes(32).toString("hex");
     const user = {
       id: crypto.randomUUID(),
       name: String(payload.name).trim(),
@@ -550,6 +942,9 @@ async function handleApi(req, res, pathname) {
       createdAt: new Date().toISOString(),
       isDeactivated: false,
       deactivatedAt: null,
+      emailVerified: false,
+      verifyToken,
+      verifyTokenExpiry: Date.now() + 24 * 60 * 60 * 1000,
     };
     try {
       await createUser(user);
@@ -558,54 +953,51 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 500, { error: "Failed to create user account." });
     }
 
-    const token = createSessionToken(user);
-    return sendJson(
-      res,
-      201,
-      { user: { id: user.id, name: user.name, email: user.email } },
-      { "Set-Cookie": sessionCookie(token, req) },
+    sendVerificationEmail(user.email, user.name, verifyToken).catch((err) =>
+      console.error("[email] Failed to send verification email:", err)
     );
+
+    return sendJson(res, 200, {
+      ok: true,
+      requiresVerification: true,
+      email: user.email,
+    });
   }
 
   if (pathname === "/api/login" && req.method === "POST") {
-    // In serverless environments without Firestore, file-based storage won't work
-    if (!useFirestore) {
-      return sendJson(res, 503, {
-        error: "User accounts require Firebase Firestore in serverless mode. Please configure FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY environment variables."
-      });
+    if (!applyRateLimit(req, res, loginLimiter, "Too many login attempts. Please try again later.")) {
+      return;
     }
-
     const payload = await readJsonBody(req);
-    const email = String(payload.email || "")
-      .trim()
-      .toLowerCase();
+    const email = String(payload.email || "").trim().toLowerCase();
     const password = String(payload.password || "");
-    const user = useFirestore
-      ? await getUserByEmail(email)
-      : (await readUsers()).find((candidate) => candidate.email === email);
+    const user = await getUserByEmail(email);
     if (!user || !passwordMatches(password, user.password)) {
       return sendJson(res, 401, { error: "Invalid email or password." });
     }
 
+    if (!user.emailVerified) {
+      return sendJson(res, 403, {
+        error: "Please verify your email before logging in.",
+        requiresVerification: true,
+        email: user.email,
+      });
+    }
+
     if (user.isDeactivated) {
-  user.isDeactivated = false;
-  user.deactivatedAt = null;
+      user.isDeactivated = false;
+      user.deactivatedAt = null;
+      const users = await readUsers();
+      const index = users.findIndex((u) => u.id === user.id);
+      if (index !== -1) { users[index] = user; await writeUsers(users); }
+    }
 
-  const users = await readUsers();
-  const index = users.findIndex((u) => u.id === user.id);
-
-  if (index !== -1) {
-    users[index] = user;
-    await writeUsers(users);
-  }
-}
-
-    const token = createSessionToken(user);
+    const token = createAccessToken(user);
+    loginLimiter.reset(getClientIdentifier(req));
     return sendJson(
-      res,
-      200,
+      res, 200,
       { user: { id: user.id, name: user.name, email: user.email } },
-      { "Set-Cookie": sessionCookie(token, req) },
+      { "Set-Cookie": authCookies(token, req) },
     );
   }
 
@@ -704,8 +1096,8 @@ async function handleApi(req, res, pathname) {
         user = await createUser(newUser);
       }
 
-      const token = createSessionToken(user);
-      const cookie = sessionCookie(token, req);
+      const token = createAccessToken(user);
+      const cookie = authCookies(token, req);
 
       return sendJson(res, 200, {
         authenticated: true,
@@ -719,19 +1111,22 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === "/api/change-password" && req.method === "POST") {
-  const session = getSession(req);
+    if (!applyRateLimit(req, res, changePasswordLimiter, "Too many change password attempts. Please try again later.")) {
+      return;
+    }
+    const session = getSession(req);
 
-  if (!session) {
-    return sendJson(res, 401, {
-      error: "Login required.",
-    });
-  }
+    if (!session) {
+      return sendJson(res, 401, {
+        error: "Login required.",
+      });
+    }
 
-  const {
-    currentPassword,
-    newPassword,
-    confirmPassword,
-  } = await readJsonBody(req);
+    const {
+      currentPassword,
+      newPassword,
+      confirmPassword,
+    } = await readJsonBody(req);
 
   if (
     !currentPassword ||
@@ -794,6 +1189,8 @@ async function handleApi(req, res, pathname) {
 
   await writeUsers(users);
 
+  changePasswordLimiter.reset(getClientIdentifier(req));
+
   return sendJson(
     res,
     200,
@@ -803,7 +1200,7 @@ async function handleApi(req, res, pathname) {
         "Password updated successfully.",
     },
     {
-      "Set-Cookie": clearSessionCookie(),
+      "Set-Cookie": clearAuthCookies(),
     }
   );
 }
@@ -837,7 +1234,7 @@ async function handleApi(req, res, pathname) {
     200,
     { success: true },
     {
-      "Set-Cookie": clearSessionCookie(),
+      "Set-Cookie": clearAuthCookies(),
     },
   );
 }
@@ -846,6 +1243,9 @@ if (
   pathname === "/api/delete-account" &&
   req.method === "POST"
 ) {
+  if (!applyRateLimit(req, res, deleteAccountLimiter, "Too many delete account attempts. Please try again later.")) {
+    return;
+  }
   const session = getSession(req);
 
   if (!session) {
@@ -923,11 +1323,14 @@ if (
     },
     {
       "Set-Cookie":
-        clearSessionCookie(),
+        clearAuthCookies(),
     }
   );
 }
 if (pathname === "/api/forgot-password" && req.method === "POST") {
+    if (!applyRateLimit(req, res, forgotPasswordLimiter, "Too many forgot password attempts. Please try again later.")) {
+      return;
+    }
     let payload;
     try {
       payload = await readJsonBody(req);
@@ -973,11 +1376,92 @@ if (pathname === "/api/forgot-password" && req.method === "POST") {
       res,
       200,
       { ok: true },
-      { "Set-Cookie": clearSessionCookie() },
+      { "Set-Cookie": clearAuthCookies() },
     );
   }
 
   if (pathname === "/api/feedback" && req.method === "POST") {
+    const session = getSession(req);
+    let payload;
+    try {
+      payload = await readJsonBody(req);
+    } catch (err) {
+      return sendJson(res, 400, { error: "Invalid JSON body." });
+    }
+
+    const { feedbackType, subject, message } = payload;
+    if (
+      typeof feedbackType !== "string" ||
+      typeof subject !== "string" ||
+      typeof message !== "string"
+    ) {
+      return sendJson(res, 400, {
+        error: "Feedback type, subject, and message must be strings.",
+      });
+    }
+
+    if (!feedbackType.trim() || !subject.trim() || !message.trim()) {
+      return sendJson(res, 400, {
+        error: "Feedback type, subject, and message are required.",
+      });
+    }
+
+    const allowedTypes = [
+      "Suggestion",
+      "Bug Report",
+      "Feature Request",
+      "General Feedback",
+    ];
+    if (!allowedTypes.includes(feedbackType)) {
+      return sendJson(res, 400, { error: "Invalid feedback type." });
+    }
+
+    if (subject.trim().length < 3) {
+      return sendJson(res, 400, {
+        error: "Subject must be at least 3 characters long.",
+      });
+    }
+
+    if (message.trim().length < 10) {
+      return sendJson(res, 400, {
+        error: "Message must be at least 10 characters long.",
+      });
+    }
+
+    const feedbackData = {
+      userId: session ? session.sub : null,
+      userName: session ? session.name : null,
+      userEmail: session ? session.email : null,
+      feedbackType,
+      subject: subject.trim(),
+      message: message.trim(),
+      status: "new",
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      if (useFirestore) {
+        const docRef = await db.collection("feedback").add(feedbackData);
+        feedbackData.id = docRef.id;
+      } else {
+        const feedbackFile = path.join(DATA_DIR, "feedback.json");
+        await fs.mkdir(DATA_DIR, { recursive: true });
+        let feedbackList = [];
+        try {
+          const raw = await fs.readFile(feedbackFile, "utf8");
+          feedbackList = JSON.parse(raw || "[]");
+        } catch (err) {
+          if (err.code !== "ENOENT") throw err;
+        }
+        feedbackData.id = crypto.randomUUID();
+        feedbackList.push(feedbackData);
+        await fs.writeFile(
+          feedbackFile,
+          JSON.stringify(feedbackList, null, 2) + "\n",
+        );
+      }
+
+      if (pathname === "/api/feedback" && req.method === "POST") {
     const session = getSession(req);
     let payload;
     try {
@@ -1053,6 +1537,44 @@ if (pathname === "/api/forgot-password" && req.method === "POST") {
       console.error("Error saving feedback:", err);
       return sendJson(res, 500, { error: "Failed to save feedback." });
     }
+  }
+
+  if (pathname === "/api/user/profile" && req.method === "GET") {
+    const session = getSession(req);
+    
+    const userData = {
+        user: {
+            name: session?.name || 'John Doe',
+            username: session?.email?.split('@')[0] || 'johndoe',
+            avatar: '🚀',
+            bio: 'Passionate about DSA and building cool stuff!',
+            joinedDate: '2024-01-15'
+        },
+        stats: {
+            totalSolved: 45,
+            xp: 2800,
+            streak: 7,
+            level: 4
+        },
+        badges: ['🌟 First Steps', '🔥 On Fire', '💎 Diamond'],
+        languages: [
+            { name: 'JavaScript', percentage: 80 },
+            { name: 'Python', percentage: 65 },
+            { name: 'Java', percentage: 50 },
+            { name: 'C++', percentage: 40 }
+        ],
+        projects: [
+            { name: 'Weather App', description: 'Real-time weather app', link: '#' },
+            { name: 'Task Manager', description: 'Manage tasks easily', link: '#' }
+        ],
+        recentActivity: [
+            { action: 'Solved Two Sum', date: '2026-06-26' },
+            { action: 'Completed Arrays Quiz', date: '2026-06-25' },
+            { action: 'Earned Diamond Badge', date: '2026-06-24' }
+        ]
+    };
+    
+    return sendJson(res, 200, { success: true, data: userData });
   }
 
   if (pathname === "/api/interview-experiences" && req.method === "POST") {
@@ -1548,6 +2070,50 @@ if (pathname === "/api/forgot-password" && req.method === "POST") {
   }
   // ── End battle routes ─────
 
+  if (pathname === "/api/verify-email" && req.method === "GET") {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const token = url.searchParams.get("token");
+    if (!token) return sendJson(res, 400, { error: "Missing token." });
+
+    const users = await readUsers();
+    const idx = users.findIndex(
+      (u) => u.verifyToken === token && u.verifyTokenExpiry > Date.now()
+    );
+    if (idx === -1) return sendJson(res, 400, { error: "Link is invalid or expired." });
+
+    users[idx].emailVerified = true;
+    users[idx].verifyToken = null;
+    users[idx].verifyTokenExpiry = null;
+    await writeUsers(users);
+
+    const sessionToken = createAccessToken(users[idx]);
+    res.setHeader("Set-Cookie", authCookies(sessionToken, req));
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (pathname === "/api/resend-verification" && req.method === "POST") {
+    if (!applyRateLimit(req, res, resendVerificationLimiter, "Too many verification requests. Please try again later.")) {
+      return;
+    }
+    const body = await readJsonBody(req);
+    const email = String(body.email || "").trim().toLowerCase();
+    if (!email) return sendJson(res, 400, { error: "Email required." });
+
+    const users = await readUsers();
+    const idx = users.findIndex((u) => u.email === email);
+    if (idx === -1 || users[idx].emailVerified) return sendJson(res, 200, { ok: true });
+
+    const newToken = crypto.randomBytes(32).toString("hex");
+    users[idx].verifyToken = newToken;
+    users[idx].verifyTokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
+    await writeUsers(users);
+
+    sendVerificationEmail(email, users[idx].name, newToken).catch((err) =>
+      console.error("[email] Resend failed:", err)
+    );
+    return sendJson(res, 200, { ok: true });
+  }
+
   return sendJson(res, 404, { error: "Not found." });
 }
 
@@ -1555,7 +2121,9 @@ function resolveStaticPath(pathname) {
 const routes = {
   "/": "index.html",
   "/login": "pages/auth/login.html",
+  "/profile": "pages/profile/public-profile.html",
   "/signup": "pages/auth/signup.html",
+  "/verify-email": "pages/auth/verify-email.html",
     "/community": "community.html",
     "/python-learning": "python-learning.html",
     "/javascript-learning": "javascript-learning.html",
@@ -1631,13 +2199,38 @@ async function serveStatic(req, res, pathname) {
       ? path.join(filePath, "index.html")
       : filePath;
     const ext = path.extname(target);
-    const content = await fs.readFile(target);
+    let content = await fs.readFile(target);
+
     const headers = {
-      "Content-Type": mimeTypes[ext] || "application/octet-stream",
       "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "X-XSS-Protection": "1; mode=block",
+      "Referrer-Policy": "strict-origin-when-cross-origin",
+      "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
     };
-    // Note: COOP header removed to allow Firebase signInWithPopup to access popup.closed
-    // when opening cross-origin OAuth popups (Google, etc.)
+
+    if (ext === ".html") {
+      // Generate a dynamic nonce for CSP script elements
+      const nonce = crypto.randomBytes(16).toString("base64");
+      
+      // Inject nonce into script tags in the HTML content
+      let htmlStr = content.toString("utf-8");
+      htmlStr = htmlStr.replace(/<script(\s|>)/gi, `<script nonce="${nonce}"$1`);
+      content = Buffer.from(htmlStr, "utf-8");
+
+      headers["Content-Security-Policy"] = 
+        `default-src 'self'; ` +
+        `script-src 'self' 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://apis.google.com; ` +
+        `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; ` +
+        `font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; ` +
+        `img-src 'self' data: https: blob:; ` +
+        `connect-src 'self' https: wss:; ` +
+        `frame-src 'self' https://*.firebaseapp.com; ` +
+        `object-src 'none'; ` +
+        `base-uri 'self';`;
+    }
+
+    headers["Content-Type"] = mimeTypes[ext] || "application/octet-stream";
     res.writeHead(200, headers);
     res.end(content);
   } catch {
@@ -1664,7 +2257,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/logout") {
-      return redirect(res, "/login", { "Set-Cookie": clearSessionCookie() });
+      return redirect(res, "/login", { "Set-Cookie": clearAuthCookies() });
     }
 
     const authorization = authorizeRequest(req, pathname);
@@ -1686,7 +2279,63 @@ const io = new SocketIOServer(server);
 io.on("connection", (socket) => {
 console.log("🟢 New client connected:", socket.id);
 
- 
+
+
+
+// ==========================================
+// AI INTERVIEWER - GEMINI API INTEGRATION
+// ==========================================
+socket.on('ai-evaluate-code', async (data = {}) => {
+    // Bot Fix 1: Validate payload first
+    if (typeof data !== 'object' || typeof data.code !== 'string' || typeof data.language !== 'string' || typeof data.problem !== 'string') {
+        return socket.emit('ai-interviewer-feedback', { hint: 'Unable to analyze code right now.' });
+    }
+
+    console.log(`🤖 AI Interviewer analyzing code...`);
+    
+    try {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            socket.emit('ai-interviewer-feedback', { hint: "Backend Error: GEMINI_API_KEY is missing in .env!" });
+            return;
+        }
+
+        // The Real Gemini Prompt
+        const prompt = `You are an expert FAANG technical interviewer. A candidate is solving the "${data.problem}" problem in ${data.language}.
+        Here is their current code:
+        
+        ${data.code}
+        
+        Your task: Give a short, strategic hint (max 2-3 sentences) to guide them. 
+        CRITICAL RULES:
+        1. Do NOT give the exact code solution. 
+        2. Focus on time/space complexity, pointing out edge cases, or spotting logical flaws.
+        3. Keep the tone encouraging, professional, and directly address the logic in their code.`;
+
+        // Real API Call to Gemini
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }]
+            })
+        });
+
+        const result = await response.json();
+        
+        if (result.candidates && result.candidates.length > 0) {
+            let aiHint = result.candidates[0].content.parts[0].text;
+            aiHint = aiHint.replace(/\*/g, '').replace(/\`/g, ''); // Clean markdown
+            socket.emit('ai-interviewer-feedback', { hint: aiHint });
+        } else {
+            socket.emit('ai-interviewer-feedback', { hint: "Hmm, your logic is interesting... keep going!" });
+        }
+        
+    } catch (error) {
+        console.error("Gemini API Error:", error);
+        socket.emit('ai-interviewer-feedback', { hint: "My AI brain is taking a break. Keep coding!" });
+    }
+});
 
 // Draw events (whiteboard)
 socket.on('draw', (data) => {
@@ -1760,7 +2409,7 @@ socket.on('voice-ice', ({ roomId, candidate, to, from }) => {
 });
 // -----------------------------------------
 
-export { server, hashPassword, passwordMatches, applySM2, validateSignup };
+export { server, hashPassword, passwordMatches, applySM2, validateSignup, updateMemoryStore, readMemoryStore };
 if (process.env.VERCEL === "1") {
   db = initializeFirebase();
   useFirestore = !!db;
@@ -1787,6 +2436,16 @@ if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
           console.warn(
             "Using a development SESSION_SECRET. Set SESSION_SECRET before deploying.",
           );
+        }
+      });
+
+      server.on("error", (err) => {
+        if (err.code === "EADDRINUSE") {
+          console.error(`\n❌ Port ${port} is already in use.`);
+          console.error(`   Stop the existing server first, then run: npm run dev\n`);
+          process.exit(1);
+        } else {
+          throw err;
         }
       });
     })

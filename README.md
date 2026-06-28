@@ -1,11 +1,12 @@
+<p align="center">
+  <img src="./images/banner.png" alt="Algo Infinity Verse Banner" width="100%">
+</p>
 <div align="center">
 
-# 🧮 Algo Infinity Verse 🌌
-
-### ⚙️ Master Data Structures & Algorithms and Crack Technical Interviews
+## Master Data Structures & Algorithms and Crack Technical Interviews
 
 [![GitHub repo size](https://img.shields.io/github/repo-size/Eshajha19/Algo-Infinity-Verse)](https://github.com/Eshajha19/Algo-Infinity-Verse)
-[![GitHub last commit](https://img.shields.io/github/last-commit/Algo-Infinity-Verse/Algo-Infinity-Verse)](https://github.com/Eshajha19/Algo-Infinity-Verse)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Eshajha19/Algo-Infinity-Verse)](https://github.com/Eshajha19/Algo-Infinity-Verse)
 
 **A modern, interactive web application for learning and practicing DSA concepts with a gamified learning experience.**
 
@@ -22,11 +23,11 @@
 
 ---
 
-## 🎯 Features
+## Features
 
 ### Core Learning Resources
 
-#### 🧮 DSA Topics
+#### DSA Topics
 - **6 Comprehensive Topics**: Arrays, Strings, Linked Lists, Trees, Graphs, Dynamic Programming
 - Each topic includes:
   - Detailed theory explanations
@@ -35,17 +36,17 @@
   - Difficulty ratings (Easy-Medium-Hard)
   - Sample problem lists
 
-#### ✍ Practice Problems
-- **15+ curated problems** spanning all DSA topics
+#### Practice Problems
+- **35+ curated problems** spanning all DSA topics
 - Filterable by difficulty (Easy, Medium, Hard)
 - Real-time search functionality
 - Problem tags for quick identification
 - Acceptance rate tracking
 - Visual completion badges
 
-#### ❤️ Favorite Problems (New Feature)
+#### Favorite Problems (New Feature)
 
-Users can now:
+Users can:
 - Mark practice problems as favorites
 - Filter favorite problems
 - Persist favorites using localStorage
@@ -56,7 +57,7 @@ Users can now:
 
 ----
 
-### 🏆 Quiz System
+### Quiz System
 
 **60 Topic-Specific Questions** (10 per topic covering key concepts)
 
@@ -78,7 +79,7 @@ Users can now:
 - Attempt counter
 - Randomized question order
 
-#### 🖧 Quiz Architecture 
+#### Quiz Architecture 
 
 **Flow**
 1. User clicks "Start Quiz" on topic card
@@ -99,7 +100,7 @@ Users can now:
 
 ----
 
-### 👤 Profile & Gamification
+### Profile & Gamification
 
 **Customizable Profile:**
 - Edit display name
@@ -130,7 +131,7 @@ Users can now:
 
 ----
 
-### 📊 Dashboard
+### Dashboard
 - Complete statistics overview
 - Recent activity feed
 - Achievement badges display
@@ -139,9 +140,9 @@ Users can now:
 
 ----
 
-### 🛡️ Authentication
+### Authentication
 - Secure signup and login pages
-- PBKDF2 password hashing with per-user salts
+- PBKDF2 password hashing with per-user salts and a server-side pepper for enhanced password security
 - Signed JWT-style sessions stored in HTTP-only cookies
 - Logout endpoint that clears the session cookie
 - Protected community and support pages
@@ -149,7 +150,7 @@ Users can now:
 
 ----
 
-### </> Interactive Code Editor
+### Interactive Code Editor
 - Multi-language support (JavaScript, Python, Java, C++)
 - Line numbers and syntax highlighting
 - Code snippets insertion
@@ -160,7 +161,7 @@ Users can now:
 
 ----
 
-### 🤖 AI Chatbot Assistant
+### AI Chatbot Assistant
 - Instant DSA concept explanations
 - Time/space complexity queries
 - Problem-solving strategy hints
@@ -169,7 +170,7 @@ Users can now:
 
 ----
 
-### 🎨 User Experience / UX
+### User Experience / UX
 
 **Visual Design:**
 - Dark/Light theme toggle
@@ -187,20 +188,31 @@ Users can now:
 
 ----
 
-## 🛠️ Technology Stack
+## Technology Stack
+
+| Layer | Technologies |
+|-------|--------------|
+| **Frontend** | HTML5, CSS3, JavaScript ES6+ modules, Font Awesome, Google Fonts |
+| **Backend** | Node.js, Express 5, Socket.io |
+| **Database & Auth** | Firebase / Firestore (`firebase-admin`), JWT-style access/refresh tokens, PBKDF2 password hashing with server-side pepper |
+| **Job Queue** | BullMQ + Redis (`ioredis`) |
+| **Code Execution** | `isolated-vm` sandbox, custom `/api/execute` endpoint |
+| **AI & Parsing** | OpenAI API, Puppeteer, `pdf-parse`, `mammoth`, `csv-parse`, `js-yaml` |
+| **Email / Uploads** | Nodemailer, Multer |
+| **Build & Test** | Vite, Jest, Playwright |
 
 - ![HTML5](https://img.shields.io/badge/HTML5-E34F26?style=flat-square&logo=html5&logoColor=white) **HTML5**: Semantic markup
 - ![CSS3](https://img.shields.io/badge/CSS3-1572B6?style=flat-square&logo=css3&logoColor=white) **CSS3**: Custom properties, Flexbox, Grid, animations
-- ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black) **JavaScript (ES6+)**: Vanilla JS, no frameworks
-- ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat-square&logo=nodedotjs&logoColor=white) **Node.js**: Local HTTP server and authentication APIs
-- ![Node Crypto](https://img.shields.io/badge/Node_Crypto-339933?style=flat-square&logo=nodedotjs&logoColor=white) **Node Crypto**: Password hashing and signed session tokens
-- ![LocalStorage](https://img.shields.io/badge/LocalStorage-4B32C3?style=flat-square&logo=webauthn&logoColor=white) **LocalStorage**: Persistent user data
-- ![Font Awesome](https://img.shields.io/badge/Font_Awesome-528DD7?style=flat-square&logo=font-awesome&logoColor=white) **Font Awesome**: Icon library
-- ![Google Fonts](https://img.shields.io/badge/Google_Fonts-4285F4?style=flat-square&logo=googlefonts&logoColor=white) **Google Fonts**: Orbitron, Poppins, Fira Code
+- ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black) **JavaScript (ES6+)**: Modular client-side code
+- ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat-square&logo=nodedotjs&logoColor=white) **Node.js**: Express 5 server, APIs, auth, and real-time features
+- ![Express](https://img.shields.io/badge/Express-000000?style=flat-square&logo=express&logoColor=white) **Express 5**: HTTP server and API route wiring
+- ![Firebase](https://img.shields.io/badge/Firebase-FFCA28?style=flat-square&logo=firebase&logoColor=black) **Firebase / Firestore**: Cloud database and Admin SDK auth
+- ![Socket.io](https://img.shields.io/badge/Socket.io-010101?style=flat-square&logo=socketdotio&logoColor=white) **Socket.io**: Real-time battles and collaborative rooms
+- ![Redis](https://img.shields.io/badge/Redis-DC382D?style=flat-square&logo=redis&logoColor=white) **Redis**: BullMQ job queue backing
 
 ----
 
-## 🚀 How to Run
+## How to Run
 
 ### Prerequisites
 - Modern web browser (Chrome, Firefox, Safari, Edge)
@@ -210,7 +222,7 @@ Users can now:
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/Algo-Infinity-Verse.git
+   git clone https://github.com/Eshajha19/Algo-Infinity-Verse.git
    cd Algo-Infinity-Verse
    ```
 
@@ -220,10 +232,18 @@ Users can now:
    cp .env.example .env
    ```
 
-   Generate a session secret and paste it into `.env`:
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-   ```
+   Generate secure secrets for your environment:
+
+    ```bash
+    node -e "console.log('SESSION_SECRET=' + require('crypto').randomBytes(64).toString('hex')); console.log('PASSWORD_PEPPER=' + require('crypto').randomBytes(32).toString('hex'));"
+    ```
+
+    Copy the generated values into your `.env` file:
+
+    ```env
+    SESSION_SECRET=your_generated_session_secret
+    PASSWORD_PEPPER=your_generated_password_pepper
+    ```
 
    Start the server:
    ```bash
@@ -242,64 +262,138 @@ Users can now:
 
 ----
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 Algo-Infinity-Verse/
-├── index.html          # Main HTML structure
-├── login.html          # Login page
-├── signup.html         # Registration page
-├── server.js           # Static server and authentication API
-├── auth.js             # Client-side auth UI and route guards
-├── styles.css          # All CSS styles and responsive design
-├── script.js           # JavaScript logic, data, and interactivity
-└── README.md           # Project documentation
+├── index.html                  # Main landing page / dashboard
+├── code-playground.html        # Interactive multi-language code editor
+├── server.js                   # Express HTTP server + API route wiring
+├── auth.js                     # Client-side auth UI and route guards
+├── auth-gate.js                # Authentication gate helpers
+├── styles.css                  # Global styles, themes, and responsive design
+├── script.js                   # Core app logic, data, and interactivity
+├── firebase.js                 # Firebase Admin / Firestore setup
+├── firebase-config.js          # Firebase web SDK configuration
+├── seed-problems.js            # Problem database seeding utility
+├── sdlcAdvisor.js              # SDLC recommendation engine
+├── interceptors.js             # Request/response interceptors
+├── package.json / vite.config.js
+├── .env.example                # Environment configuration template
+│
+├── api/                        # Server API route handlers
+│   ├── auth/google.js
+│   ├── execute.js              # Sandboxed code execution
+│   ├── login.js / signup.js / logout.js / session.js
+│   ├── quiz-results.js / progress.js / leaderboard.js
+│   ├── battles.js / contests.js
+│   └── csrf-token.js
+│
+├── backend/                    # Server-side business logic
+│   ├── services/
+│   │   ├── auth.service.js     # PBKDF2 hashing, access/refresh tokens
+│   │   ├── email.service.js    # Nodemailer verification emails
+│   │   ├── memory.service.js   # Spaced-repetition engine
+│   │   └── readinessEngine.js  # Hiring readiness scoring
+│   ├── jobs/
+│   │   ├── queue.js            # BullMQ job queue
+│   │   ├── worker.js           # Background job worker
+│   │   └── updateReadinessScores.js
+│   ├── jsSandboxRunner.js      # isolated-vm JS sandbox runner
+│   ├── resume-analyzer/        # Resume parsing + ATS scoring
+│   ├── repository-analyzer/    # Repo / CI-CD analysis
+│   ├── knowledge-base/         # LLM client + vector store helpers
+│   ├── vcs/                    # Version-control provider factory
+│   └── utils/                  # Shared backend helpers
+│
+├── modules/                    # Shared client-side ES modules
+│   ├── quiz.js
+│   ├── theme.js / navbar.js
+│   ├── code-executor.js
+│   ├── cacheEngine.js
+│   ├── firebase-client.js
+│   ├── offline-learning.js
+│   └── ...
+│
+├── pages/                      # Feature pages
+│   ├── auth/
+│   │   ├── login.html / signup.html
+│   │   ├── forgot-password.html / verify-email.html
+│   │   └── setting.html
+│   ├── profile/
+│   │   ├── profile.html / profile.js
+│   │   └── public-profile.html
+│   ├── interview/
+│   │   ├── mock-interview-simulator/
+│   │   ├── company-interview/
+│   │   ├── behavioral-questions/
+│   │   └── ...
+│   ├── learning/               # Topic learning pages
+│   ├── visualizers/            # Algorithm visualizers
+│   ├── ai-features/            # AI-powered experiments
+│   ├── tools/                  # Productivity tools (calculators, trainers, etc.)
+│   ├── career/                 # Resume & job preparation
+│   ├── community/              # Community, peer rooms, support
+│   ├── editors/                # Per-language code editors
+│   ├── Dsa-Battle/             # Competitive coding battles
+│   ├── repo-analyzer/
+│   ├── resources/
+│   └── admin/
+│
+├── data/                       # Local JSON data stores
+├── public/                     # Static assets
+├── partials/                   # Reusable HTML partials
+├── scripts/                    # Build / audit / utility scripts
+├── tests/                      # Jest + Playwright tests
+├── docs/                       # Contributor docs
+└── contributors/               # Contributor pages
 ```
+
+> The project now contains **200+ files** spread across feature pages, backend services, API routes, and shared modules.
 
 ---
 
-## ✅ Key Scripts
+## Modular Architecture
 
-### 🧬 Data Structures
+### Front-end Modules 
+The monolithic `script.js` has been split into focused ES modules:
 
-**`dsaTopics`** - Topic information including:
-- ID, name, icon, description
-- Difficulty level
-- Theory explanation
-- Related problems
+- **`quiz.js`** — Shuffle logic, scoring, progress tracking, and results rendering
+- **`code-executor.js`** — Client-side editor helpers and execution helpers
+- **`firebase-client.js`** — Firebase web SDK integration
+- **`offline-learning.js`** — Offline-capable study resources
+- **`cacheEngine.js`** — In-memory and localStorage caching helpers
+- **`navbar.js`** — Responsive navigation and mobile hamburger menu
+- **`theme.js`** — Dark / light theme switching and persistence
+- **`toast.js` / `loader.js`** — Notifications and loading states
+- **`error-boundary.js` / `domSanitizer.js`** — Runtime safety helpers
 
-**`quizQuestions`** - Quiz database:
-- 60 questions across 6 topics
-- Multiple-choice format (4 options)
-- Correct answer indices
-- Detailed explanations
+### API Layer 
+Route handlers mounted in `server.js`:
+- **`execute.js`** — Sandboxed code execution endpoint
+- **`login.js` / `signup.js` / `logout.js` / `session.js`** — Auth flows
+- **`auth/google.js`** — Google sign-in integration
+- **`quiz-results.js` / `progress.js`** — Progress persistence
+- **`leaderboard.js` / `battles.js` / `contests.js`** — Competitive features
+- **`csrf-token.js`** — CSRF protection token issuance
 
-**`practiceProblems`** - Problem catalog:
-- Title, difficulty, tags
-- Acceptance rates
-- Category associations
+### Backend Services
+- **`services/auth.service.js`** — PBKDF2 password hashing, signed access/refresh tokens, rate limiting
+- **`services/email.service.js`** — Verification and notification emails via Nodemailer
+- **`services/memory.service.js`** — SM-2 spaced repetition scheduling
+- **`services/readinessEngine.js`** — Hiring readiness scoring engine
+- **`jobs/`** — BullMQ queue, worker, and background score updates
+- **`jsSandboxRunner.js`** — `isolated-vm` based JavaScript sandbox
+- **`resume-analyzer/`** — Resume parsing, ATS scoring, and skill gap analysis
+- **`repository-analyzer/`** — Repository and CI/CD pipeline analysis
+- **`knowledge-base/`** — OpenAI client, vector store, and topic generation helpers
 
-**`chatbotResponses`** - Knowledge base:
-- DSA concept explanations
-- Complexity definitions
-- Algorithm overviews
-
-### 🟢 State Management
-
-`userProgress` object tracks:
-- User name and avatar
-- Completed problem IDs
-- Total XP and current level
-- Day streak count
-- Earned badges
-- Quiz scores per topic
-- Last active date
-
-Persisted to `localStorage` under key `algoInfinityVerse`.
+### State Management
+Client-side state (profile, XP, streaks, badges, quiz scores, favorites) is still persisted to **`localStorage`** under the key `algoInfinityVerse`. Multi-user data and long-term progress are stored in **Firebase/Firestore** through the server API.
 
 ----
 
-## ✚ Extending the Project
+## Extending the Project
 
 ### Adding New Quiz Questions
 
@@ -345,7 +439,7 @@ const quizQuestions = {
 
 ----
 
-## 🌐 Browser Support
+## Browser Support
 
 - Chrome 90+
 - Firefox 88+
@@ -356,25 +450,28 @@ Uses modern ES6+ features and CSS Grid/Flexbox.
 
 ----
 
-## 🔮 Future Enhancements
+## Future Enhancements
+
+Features already delivered:
+- Database backend for multi-user support (Firebase / Firestore)
+- Real code execution sandbox (`/api/execute` + `isolated-vm`)
+- Interview simulation mode and company-specific question banks
 
 Potential features for expansion:
-- Database backend for multi-user support
-- Real code execution sandbox
 - Social features (friends, groups, competitions)
 - Advanced analytics and learning insights
 - Video tutorials and explanations
 - Mobile app (React Native)
-- Interview simulation mode
-- Company-specific question banks
+- Real-time collaborative coding rooms
+- AI-powered personalized learning paths
 
 ---
 
-## 🤝 Contributing & Community
+## Contributing & Community
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-### ❓ How to Contribute
+### How to Contribute
 
 1. **Fork** the repository
 2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
@@ -382,13 +479,13 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 4. **Push** to the branch (`git push origin feature/amazing-feature`)
 5. **Open** a Pull Request
 
-### ❤️ Code of Conduct
+### Code of Conduct
 
 Be respectful and constructive. See our [Code of Conduct](CODE_OF_CONDUCT.md) for guidelines.
 
 ---
 
-## 📞 Support
+## Support
 
 - 📧 Email: opensource@algo-infinity-verse.org
 - 💬 Discord: [Join our server](https://discord.gg/algo-infinity)
@@ -396,13 +493,13 @@ Be respectful and constructive. See our [Code of Conduct](CODE_OF_CONDUCT.md) fo
 
 ---
 
-## ⚖️ License
+## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
 
-## 📜 Acknowledgments
+## Acknowledgments
 
 - Inspired by LeetCode, HackerRank, and freeCodeCamp
 - Built with ❤️ for the DSA learning community
@@ -411,4 +508,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-**Start your DSA journey today and level up your coding skills!** 🚀
+**Start your DSA journey today and level up your coding skills!!** 

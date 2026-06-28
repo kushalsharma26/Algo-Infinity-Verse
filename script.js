@@ -1,4 +1,156 @@
 // ============================================
+// UTILITY FUNCTIONS (Memoization & Debounce)
+// ============================================
+function debounce(func, wait) {
+  let timeout;
+  return function(...args) {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func.apply(this, args), wait);
+  };
+}
+
+// ============================================
+// ABORT MANAGER
+// ============================================
+class AbortManager {
+  constructor() {
+    this.controllers = new Map();
+  }
+  getSignal(key) {
+    if (this.controllers.has(key)) {
+      this.controllers.get(key).abort();
+    }
+    const controller = new AbortController();
+    this.controllers.set(key, controller);
+    return controller.signal;
+  }
+  clearSignal(key) {
+    this.controllers.delete(key);
+  }
+}
+
+const apiAbort = new AbortManager();
+
+// ============================================
+// CACHE MANAGER (IndexedDB)
+// ============================================
+class CacheManager {
+  constructor(dbName = 'AlgoInfinityCache', storeName = 'api_responses') {
+    this.dbName = dbName;
+    this.storeName = storeName;
+    this.dbPromise = this.initDB();
+  }
+
+  initDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.dbName, 1);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(this.storeName)) {
+          db.createObjectStore(this.storeName, { keyPath: 'url' });
+        }
+      };
+    });
+  }
+
+  async set(url, data, type = 'json', ttlMs = 3600000) {
+    try {
+      const db = await this.dbPromise;
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.storeName, 'readwrite');
+        const store = tx.objectStore(this.storeName);
+        const record = {
+          url,
+          data,
+          type,
+          expiresAt: Date.now() + ttlMs,
+          updatedAt: Date.now()
+        };
+        const req = store.put(record);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      console.warn("Cache set error:", e);
+    }
+  }
+
+  async get(url) {
+    try {
+      const db = await this.dbPromise;
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.storeName, 'readonly');
+        const store = tx.objectStore(this.storeName);
+        const req = store.get(url);
+        req.onsuccess = () => {
+          const record = req.result;
+          if (!record) return resolve(null);
+          if (Date.now() > record.expiresAt) {
+            this.invalidate(url);
+            return resolve(null);
+          }
+          resolve(record);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      console.warn("Cache get error:", e);
+      return null;
+    }
+  }
+
+  async invalidate(url) {
+    try {
+      const db = await this.dbPromise;
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.storeName, 'readwrite');
+        const store = tx.objectStore(this.storeName);
+        const req = store.delete(url);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      console.warn("Cache invalidate error:", e);
+    }
+  }
+
+  async fetchWithCache(url, options = {}, ttlMs = 3600000, type = 'json') {
+    const cached = await this.get(url);
+    
+    const doFetch = async () => {
+      try {
+        const resp = await fetch(url, options);
+        if (!resp.ok) throw new Error('Network response was not ok');
+        const data = type === 'json' ? await resp.json() : await resp.text();
+        await this.set(url, data, type, ttlMs);
+        return data;
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        console.warn(`CacheManager fetch failed for ${url}:`, e);
+        if (cached) return cached.data;
+        throw e;
+      }
+    };
+
+    if (cached) {
+      const age = Date.now() - cached.updatedAt;
+      if (age > ttlMs / 2) {
+        doFetch().catch(e => {
+          if (e.name !== 'AbortError') console.warn('Background revalidate failed:', e);
+        });
+      }
+      return cached.data;
+    }
+
+    return await doFetch();
+  }
+}
+
+const apiCache = new CacheManager();
+
+// ============================================
 // PARTIAL LOADER
 // ============================================
 function getPartialsBase() {
@@ -13,17 +165,24 @@ function getPartialsBase() {
 }
 
 async function loadPartial(id, url) {
+  const abortKey = `partial_${id}`;
   try {
+    const signal = apiAbort.getSignal(abortKey);
     const base = getPartialsBase();
     const filename = url.replace(/^\/?partials\//, '');
     const fetchUrl = base + '/' + filename;
-    const resp = await fetch(fetchUrl);
-    if (!resp.ok) throw new Error('Failed to load ' + url);
-    const html = await resp.text();
+    
+    // Cache partials for 24 hours (86400000 ms) as they rarely change
+    const html = await apiCache.fetchWithCache(fetchUrl, { signal }, 86400000, 'text');
+    
     document.getElementById(id).innerHTML = html;
     handleActiveNav();
   } catch (e) {
-    console.warn('Could not load partial:', url);
+    if (e.name !== 'AbortError') {
+      console.warn('Could not load partial:', url);
+    }
+  } finally {
+    apiAbort.clearSignal(abortKey);
   }
 }
 
@@ -143,16 +302,16 @@ const dsaTopics = [
 // ============================================
 const practiceProblems = [
   { id: 1, title: "Two Sum", difficulty: "easy", tags: ["Arrays", "Hash Table"], acceptance: "48.2%", category: "arrays", description: "Given an array of integers nums and an integer target, return indices of the two numbers that add up to target.", constraints: ["2 ≤ nums.length ≤ 10⁴", "-10⁹ ≤ nums[i] ≤ 10⁹", "Only one valid answer exists"], followUp: "Can you solve it in O(n) time complexity?", functionName: "twoSum", params: ["nums", "target"], testCases: [{ input: [[2,7,11,15], 9], expected: [0,1] }, { input: [[3,2,4], 6], expected: [1,2] }, { input: [[3,3], 6], expected: [0,1] }] },
-  { id: 2, title: "Valid Parentheses", difficulty: "easy", tags: ["Strings", "Stack"], acceptance: "40.2%", category: "strings", description: "Given a string s containing just the characters '(', ')', '{', '}', '[' and ']', determine if the input string is valid.", constraints: ["1 ≤ s.length ≤ 10⁴", "s consists of parentheses only '()[]{}'"], followUp: "Can you solve it in O(n) time and O(n) space?", functionName: "isValid", testCases: [{ input: ["()"], expected: true }, { input: ["()[]{}"], expected: true }, { input: ["(]"], expected: false }, { input: ["([)]"], expected: false }, { input: ["{[]}"], expected: true }] },
-  { id: 3, title: "Merge Two Sorted Lists", difficulty: "easy", tags: ["Linked List", "Recursion"], acceptance: "58.5%", category: "linkedlist", description: "Given two sorted arrays list1 and list2, merge them into one sorted array.", constraints: ["0 ≤ list1.length, list2.length ≤ 50", "-100 ≤ list1[i], list2[i] ≤ 100"], followUp: "Can you solve it iteratively using O(1) extra space, and also recursively?", functionName: "mergeLists", testCases: [{ input: [[1,2,4], [1,3,4]], expected: [1,1,2,3,4,4] }, { input: [[], []], expected: [] }, { input: [[], [0]], expected: [0] }] },
+  { id: 2, title: "Valid Parentheses", difficulty: "easy", tags: ["Strings", "Stack"], acceptance: "40.2%", category: "strings", description: "Given a string s containing just the characters '(', ')', '{', '}', '[' and ']', determine if the input string is valid.", constraints: ["1 ≤ s.length ≤ 10⁴", "s consists of parentheses only '()[]{}'"], followUp: "Can you solve it in O(n) time and O(n) space?", functionName: "isValid", params: ["brackets"], guide: "brackets: string of '()', '{}', '[]' characters\nreturns: true if every opening bracket has a matching closing bracket in the correct order, false otherwise", testCases: [{ input: ["()"], expected: true }, { input: ["()[]{}"], expected: true }, { input: ["(]"], expected: false }, { input: ["([)]"], expected: false }, { input: ["{[]}"], expected: true }] },
+  { id: 3, title: "Merge Two Sorted Lists", difficulty: "easy", tags: ["Linked List", "Recursion"], acceptance: "58.5%", category: "linkedlist", description: "Given two sorted arrays list1 and list2, merge them into one sorted array.", constraints: ["0 ≤ list1.length, list2.length ≤ 50", "-100 ≤ list1[i], list2[i] ≤ 100"], followUp: "Can you solve it iteratively using O(1) extra space, and also recursively?", functionName: "mergeLists", params: ["list1", "list2"], guide: "list1: first sorted array of integers\nlist2: second sorted array of integers\nreturns: a new sorted array containing all elements from both lists in ascending order", testCases: [{ input: [[1,2,4], [1,3,4]], expected: [1,1,2,3,4,4] }, { input: [[], []], expected: [] }, { input: [[], [0]], expected: [0] }] },
   { id: 4, title: "Maximum Subarray", difficulty: "medium", tags: ["Arrays", "Divide & Conquer"], acceptance: "46.2%", category: "arrays", description: "Given an integer array nums, find the contiguous subarray (containing at least one number) which has the largest sum.", constraints: ["1 ≤ nums.length ≤ 10⁵", "-10⁴ ≤ nums[i] ≤ 10⁴"], followUp: "Can you solve it in O(n) time using Kadane's Algorithm?", functionName: "maxSubArray", testCases: [{ input: [[-2,1,-3,4,-1,2,1,-5,4]], expected: 6 }, { input: [[1]], expected: 1 }, { input: [[5,4,-1,7,8]], expected: 23 }, { input: [[-1]], expected: -1 }] },
   { id: 5, title: "LRU Cache", difficulty: "medium", tags: ["Design", "Hash Table"], acceptance: "37.5%", category: "arrays", description: "Design a data structure that follows the constraints of a Least Recently Used (LRU) cache.", constraints: ["1 ≤ capacity ≤ 3000", "0 ≤ key, value ≤ 10⁴", "At most 2 × 10⁵ calls"], followUp: "Can you implement both get and put in O(1) time complexity?" },
-  { id: 6, title: "Clone Graph", difficulty: "medium", tags: ["Graphs", "DFS", "BFS"], acceptance: "43.2%", category: "graphs", description: "Given a reference to a node in a connected undirected graph, return a deep copy (clone) of the graph.", constraints: ["The number of nodes in the graph is in the range [0, 100]", "1 ≤ Node.val ≤ 100", "Node.val is unique for each node"], followUp: "Can you solve it using both BFS and DFS approaches?" },
-  { id: 7, title: "Longest Increasing Subsequence", difficulty: "hard", tags: ["DP", "Binary Search"], acceptance: "42.1%", category: "dp", description: "Given an integer array nums, return the length of the longest strictly increasing subsequence.", constraints: ["1 ≤ nums.length ≤ 2500", "-10⁴ ≤ nums[i] ≤ 10⁴"], followUp: "Can you improve from O(n²) DP to O(n log n) using binary search?", functionName: "lengthOfLIS", testCases: [{ input: [[10,9,2,5,3,7,101,18]], expected: 4 }, { input: [[0,1,0,3,2,3]], expected: 4 }, { input: [[7,7,7,7,7,7,7]], expected: 1 }] },
+  { id: 6, title: "Clone Graph", difficulty: "medium", tags: ["Graphs", "DFS", "BFS"], acceptance: "43.2%", category: "graphs", description: "Given an adjacency list representing a connected undirected graph, return a deep copy (clone) of the graph as an adjacency list.", constraints: ["0 ≤ adjList.length ≤ 100", "1 ≤ adjList[i][j] ≤ 100", "Each node's value is 1-indexed (node i+1 corresponds to adjList[i])"], followUp: "Can you solve it using both BFS and DFS approaches?", functionName: "cloneGraph", params: ["adjList"], guide: "adjList: 2D array where adjList[i] lists the neighbors of node i+1 (1-indexed)\nreturns: a deep copy of the adjacency list representing the cloned graph", testCases: [ { input: [[[2,4],[1,3],[2,4],[1,3]]], expected: [[2,4],[1,3],[2,4],[1,3]] }, { input: [[[]]], expected: [[]] }, { input: [[]], expected: [] } ] },
+  { id: 7, title: "Longest Increasing Subsequence", difficulty: "hard", tags: ["DP", "Binary Search"], acceptance: "42.1%", category: "dp", description: "Given an integer array nums, return the length of the longest strictly increasing subsequence.", constraints: ["1 ≤ nums.length ≤ 2500", "-10⁴ ≤ nums[i] ≤ 10⁴"], followUp: "Can you improve from O(n²) DP to O(n log n) using binary search?", functionName: "lengthOfLIS", params: ["nums"], guide: "nums: array of integers\nreturns: length of the longest strictly increasing subsequence", testCases: [{ input: [[10,9,2,5,3,7,101,18]], expected: 4 }, { input: [[0,1,0,3,2,3]], expected: 4 }, { input: [[7,7,7,7,7,7,7]], expected: 1 }] },
   { id: 8, title: "Word Ladder", difficulty: "hard", tags: ["Graphs", "BFS"], acceptance: "31.4%", category: "graphs", description: "Given two words, beginWord and endWord, and a dictionary wordList, return the number of words in the shortest transformation sequence.", constraints: ["1 ≤ beginWord.length ≤ 10", "endWord.length == beginWord.length", "1 ≤ wordList.length ≤ 5000"], followUp: "Can you find ALL shortest transformation sequences?" },
-  { id: 9, title: "Trapping Rain Water", difficulty: "hard", tags: ["Arrays", "Two Pointers"], acceptance: "48.7%", category: "arrays", description: "Given n non-negative integers representing an elevation map where the width of each bar is 1, compute how much water it can trap after raining.", constraints: ["1 ≤ height.length ≤ 2 × 10⁴", "0 ≤ height[i] ≤ 10⁵"], followUp: "Can you solve it in O(n) time and O(1) space using the two-pointer technique?", functionName: "trap", testCases: [{ input: [[0,1,0,2,1,0,1,3,2,1,2,1]], expected: 6 }, { input: [[4,2,0,3,2,5]], expected: 9 }] },
-  { id: 10, title: "Reverse Linked List", difficulty: "easy", tags: ["Linked List"], acceptance: "72.1%", category: "linkedlist", description: "Given an array representing a linked list, reverse it and return the reversed array.", constraints: ["0 ≤ arr.length ≤ 5000", "-5000 ≤ arr[i] ≤ 5000"], followUp: "Can you solve it both iteratively and recursively?", functionName: "reverseList", testCases: [{ input: [[1,2,3,4,5]], expected: [5,4,3,2,1] }, { input: [[1,2]], expected: [2,1] }, { input: [[]], expected: [] }] },
-  { id: 11, title: "Invert Binary Tree", difficulty: "easy", tags: ["Trees", "DFS"], acceptance: "68.5%", category: "trees", description: "Given a binary tree represented as a level-order array, invert it and return the inverted level-order array.", constraints: ["0 ≤ arr.length ≤ 100", "-100 ≤ arr[i] ≤ 100"], followUp: "Can you solve it both recursively and iteratively using a queue or stack?", functionName: "invertTree", testCases: [{ input: [[4,2,7,1,3,6,9]], expected: [4,7,2,9,6,3,1] }, { input: [[2,1,3]], expected: [2,3,1] }, { input: [[]], expected: [] }] },
+  { id: 9, title: "Trapping Rain Water", difficulty: "hard", tags: ["Arrays", "Two Pointers"], acceptance: "48.7%", category: "arrays", description: "Given n non-negative integers representing an elevation map where the width of each bar is 1, compute how much water it can trap after raining.", constraints: ["1 ≤ height.length ≤ 2 × 10⁴", "0 ≤ height[i] ≤ 10⁵"], followUp: "Can you solve it in O(n) time and O(1) space using the two-pointer technique?", functionName: "trap", params: ["height"], guide: "height: array of non-negative integers representing bar heights in the elevation map\nreturns: total units of rainwater that can be trapped between the bars\n\nHint: Use two pointers (left at 0, right at end). Track maxLeft and maxRight. At each step, process the shorter side: if height[left] < height[right], water += max(0, maxLeft - height[left]), else water += max(0, maxRight - height[right]).", testCases: [{ input: [[0,1,0,2,1,0,1,3,2,1,2,1]], expected: 6 }, { input: [[4,2,0,3,2,5]], expected: 9 }] },
+  { id: 10, title: "Reverse Linked List", difficulty: "easy", tags: ["Linked List"], acceptance: "72.1%", category: "linkedlist", description: "Given an array representing a linked list, reverse it and return the reversed array.", constraints: ["0 ≤ arr.length ≤ 5000", "-5000 ≤ arr[i] ≤ 5000"], followUp: "Can you solve it both iteratively and recursively?", functionName: "reverseList", params: ["head"], guide: "head: array of integers representing the linked list values\nreturns: reversed array with elements in opposite order\n\nHint: Use two pointers (prev starts empty, curr starts at head). Iterate through, reversing each element's position.", testCases: [{ input: [[1,2,3,4,5]], expected: [5,4,3,2,1] }, { input: [[1,2]], expected: [2,1] }, { input: [[]], expected: [] }] },
+  { id: 11, title: "Invert Binary Tree", difficulty: "easy", tags: ["Trees", "DFS"], acceptance: "68.5%", category: "trees", description: "Given a binary tree represented as a level-order array, invert it and return the inverted level-order array.", constraints: ["0 ≤ arr.length ≤ 100", "-100 ≤ arr[i] ≤ 100"], followUp: "Can you solve it both recursively and iteratively using a queue or stack?", functionName: "invertTree", params: ["root"], guide: "root: level-order array of integers representing the binary tree (null for missing nodes)\nreturns: level-order array of the inverted binary tree (swapped left/right children)\n\nHint: Recursively swap left and right children at each node. Base case: when root is null or empty.", testCases: [{ input: [[4,2,7,1,3,6,9]], expected: [4,7,2,9,6,3,1] }, { input: [[2,1,3]], expected: [2,3,1] }, { input: [[]], expected: [] }] },
   { id: 12, title: "Validate BST", difficulty: "medium", tags: ["Trees", "Recursion"], acceptance: "28.4%", category: "trees", description: "Given a binary tree represented as a level-order array (null for missing children), determine if it is a valid BST.", constraints: ["1 ≤ arr.length ≤ 10⁴", "-2³¹ ≤ arr[i] ≤ 2³¹ - 1"], followUp: "Can you solve it without recursion?", functionName: "isValidBST", testCases: [{ input: [[2,1,3]], expected: true }, { input: [[5,1,4,null,null,3,6]], expected: false }] },
   { id: 13, title: "Number of Islands", difficulty: "medium", tags: ["Graphs", "DFS"], acceptance: "54.8%", category: "graphs", description: "Given an m x n 2D binary grid which represents a map of '1's (land) and '0's (water), return the number of islands.", constraints: ["1 ≤ m, n ≤ 300", "grid[i][j] is '0' or '1'"], followUp: "Can you solve it using both DFS and Union-Find?", functionName: "numIslands", testCases: [{ input: [[["1","1","1","1","0"],["1","1","0","1","0"],["1","1","0","0","0"],["0","0","0","0","0"]]], expected: 1 }, { input: [[["1","1","0","0","0"],["1","1","0","0","0"],["0","0","1","0","0"],["0","0","0","1","1"]]], expected: 3 }, { input: [[["0"]]], expected: 0 }] },
   { id: 14, title: "House Robber", difficulty: "medium", tags: ["DP", "Arrays"], acceptance: "42.3%", category: "dp", description: "You are a professional robber planning to rob houses along a street. Return the maximum amount of money you can rob without robbing two adjacent houses.", constraints: ["1 ≤ nums.length ≤ 100", "0 ≤ nums[i] ≤ 400"], followUp: "What if the houses are arranged in a circle?", functionName: "rob", testCases: [{ input: [[1,2,3,1]], expected: 4 }, { input: [[2,7,9,3,1]], expected: 12 }, { input: [[2,1,1,2]], expected: 4 }] },
@@ -335,7 +494,7 @@ let currentProblem = null;
 document.addEventListener('DOMContentLoaded', () => {
   console.log('DOMContentLoaded fired, initializing app...');
   loadUserData();
-  initFlashcardsRevision();
+  //initFlashcardsRevision();
 
   initLoadingScreen();
   initNavbar();
@@ -367,12 +526,166 @@ document.addEventListener("DOMContentLoaded", () => {
   initDailyChallenge();
   initChatbot();
   initProfile();
+  initAiInterviewer();
   initNewsletterValidation();
   initScrollEffects();
   initFooterCurrentDate();
   updateProfile();
 });
 
+// ============================================
+// AGENTIC AI INTERVIEW COMPANION (ISSUE #578)
+// ============================================
+let isAiInterviewerActive = false;
+let workspaceSocket = null;
+
+// 1. Claude's Floating UI Styles
+(function injectAiHintStyles() {
+  if (document.getElementById('ai-hint-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'ai-hint-styles';
+ style.textContent = `
+    #ai-hint-bubble { position: absolute; bottom: 70px; right: 16px; width: 300px; max-width: calc(100% - 32px); background: #0f1f1a; border: 1px solid #10b981; border-left: 4px solid #10b981; border-radius: 12px; padding: 14px 16px; z-index: 99999; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); font-family: 'Poppins', sans-serif; animation: ai-hint-slide-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1); pointer-events: all; }
+    #ai-hint-bubble.ai-hint-dismissing { animation: ai-hint-slide-out 0.2s ease-in forwards; }
+    @keyframes ai-hint-slide-in { from { opacity: 0; transform: translateY(16px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes ai-hint-slide-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(12px); } }
+    #ai-hint-bubble .ai-hint-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    #ai-hint-bubble .ai-hint-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: #10b981; letter-spacing: 0.3px; font-family: 'Orbitron', sans-serif; }
+    #ai-hint-bubble .ai-hint-close { background: none; border: none; cursor: pointer; color: #64748b; font-size: 18px; line-height: 1; padding: 0; transition: color 0.15s ease; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 4px; }
+    #ai-hint-bubble .ai-hint-close:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.06); }
+    #ai-hint-bubble .ai-hint-body { font-size: 13.5px; color: #cbd5e1; line-height: 1.6; font-family: 'Poppins', sans-serif; }
+    #ai-hint-bubble .ai-hint-footer { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(16, 185, 129, 0.15); }
+    #ai-hint-bubble .ai-hint-pulse { width: 7px; height: 7px; background: #10b981; border-radius: 50%; flex-shrink: 0; animation: ai-hint-pulse 1.6s ease-in-out infinite; }
+    @keyframes ai-hint-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.3; transform: scale(0.85); } }
+    #ai-hint-bubble .ai-hint-footer-text { font-size: 11px; color: #475569; font-family: 'Fira Code', monospace; }
+  `;
+  document.head.appendChild(style);
+}());
+
+// 2. The Main Init Function
+// ============================================
+// AGENTIC AI INTERVIEW COMPANION LOGIC
+// ============================================
+function initAiInterviewer() {
+    const editor = document.getElementById('codeEditor');
+    
+    if (!workspaceSocket && typeof io !== 'undefined') {
+        workspaceSocket = io();
+    }
+
+    if (!editor || !workspaceSocket) {
+        console.warn('AI Interviewer: editor or socket not ready', { editor: !!editor, socket: !!workspaceSocket });
+        return;
+    }
+
+    // Debounce to prevent spamming API
+    const sendLiveCodeToAi = debounce((code) => {
+        if (!isAiInterviewerActive || code.trim().length < 10) return;
+        const lang = document.getElementById('languageSelect')?.value || 'javascript';
+        const problemTitle = currentProblem ? currentProblem.title : "Free Workspace";
+
+        // Bot Fix: Removed userId completely to avoid PII leak
+        workspaceSocket.emit('ai-evaluate-code', {
+            code: code,
+            language: lang,
+            problem: problemTitle
+        });
+        console.log("🕵️‍♂️ Sent live code to AI Interviewer for analysis...");
+    }, 2500);
+
+    // Trigger on typing
+    editor.addEventListener('input', (e) => {
+        if (isAiInterviewerActive) {
+            sendLiveCodeToAi(e.target.value);
+        }
+    });
+
+    // Receive Claude's Beautiful Bubble
+    workspaceSocket.on('ai-interviewer-feedback', (data) => {
+        if (!data || !data.hint) return;
+
+        const existing = document.getElementById('ai-hint-bubble');
+        if (existing) existing.remove();
+
+        const bubble = document.createElement('div');
+        bubble.id = 'ai-hint-bubble';
+        bubble.setAttribute('role', 'status');
+        bubble.setAttribute('aria-live', 'polite');
+
+        const hintText = document.createTextNode(data.hint);
+        const hintSpan = document.createElement('span');
+        hintSpan.appendChild(hintText);
+
+        bubble.innerHTML = `
+            <div class="ai-hint-header">
+            <div class="ai-hint-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>
+                AI Interviewer
+            </div>
+            <button class="ai-hint-close" aria-label="Dismiss hint">&#x2715;</button>
+            </div>
+            <div class="ai-hint-body"></div>
+            <div class="ai-hint-footer">
+            <div class="ai-hint-pulse"></div>
+            <span class="ai-hint-footer-text">Observing your code live</span>
+            </div>
+        `;
+
+        bubble.querySelector('.ai-hint-body').appendChild(hintSpan);
+
+        // Inject inside modal, not body — fixes the "outside editor" bug
+        const target = document.querySelector('.quiz-modal-content') 
+                       || document.getElementById('quizEditorModal') 
+                       || document.body;
+        if (target !== document.body) {
+            target.style.position = 'relative';
+        }
+        target.appendChild(bubble);
+
+        const closeBtn = bubble.querySelector('.ai-hint-close');
+        closeBtn.addEventListener('click', () => {
+            bubble.classList.add('ai-hint-dismissing');
+            bubble.addEventListener('animationend', () => bubble.remove(), { once: true });
+        });
+
+        const autoDismiss = setTimeout(() => {
+            if (document.getElementById('ai-hint-bubble')) {
+                bubble.classList.add('ai-hint-dismissing');
+                bubble.addEventListener('animationend', () => bubble.remove(), { once: true });
+            }
+        }, 18000);
+
+        closeBtn.addEventListener('click', () => clearTimeout(autoDismiss), { once: true });
+    });
+}
+
+function toggleAiInterviewer() {
+    isAiInterviewerActive = !isAiInterviewerActive;
+    
+    // Bot Fix: Sync Accessibility (aria-pressed) for screen readers
+    const toggleBtn = document.getElementById('aiInterviewerToggle');
+    if (toggleBtn) {
+        toggleBtn.setAttribute('aria-pressed', isAiInterviewerActive.toString());
+    }
+
+    if (isAiInterviewerActive) {
+        // Re-init if socket not ready yet
+        if (!workspaceSocket && typeof io !== 'undefined') {
+            workspaceSocket = io();
+            initAiInterviewer();
+        }
+        showNotification("🤖 Agentic AI Interviewer is now observing your code.", "success");
+        // Bot Fix: Removed the forced 'Test' emit completely. The real debounce will handle it now.
+    } else {
+        showNotification("🤖 Agentic AI Interviewer deactivated.", "info");
+        // Also remove bubble if user turns off AI
+        const existing = document.getElementById('ai-hint-bubble');
+        if (existing) {
+            existing.classList.add('ai-hint-dismissing');
+            existing.addEventListener('animationend', () => existing.remove(), { once: true });
+        }
+    }
+}
 // ============================================
 // LOADING SCREEN
 // ============================================
@@ -821,6 +1134,7 @@ function renderQuizQuestion() {
 }
 
 function selectQuizAnswer(selectedIndex) {
+  clearInterval(quizTimerInterval);
   const question = currentQuiz.questions[currentQuiz.currentQuestionIndex];
   const isCorrect = selectedIndex === question.correct;
   currentQuiz.answers.push({ questionId: question.id, selected: selectedIndex, correct: question.correct, isCorrect: isCorrect });
@@ -947,6 +1261,46 @@ function initPracticeSection() {
     });
   });
 
+  // AI Recommend Button
+  const aiRecommendBtn = document.getElementById("ai-recommend-btn");
+  if (aiRecommendBtn) {
+    aiRecommendBtn.addEventListener("click", async () => {
+      try {
+        aiRecommendBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finding...';
+        aiRecommendBtn.disabled = true;
+        
+        const res = await fetch("/api/recommendations/next");
+        if (res.status === 401) {
+           alert("Please log in to get AI recommendations.");
+           return;
+        }
+        const data = await res.json();
+        
+        if (data.success && data.recommendation) {
+           const rec = data.recommendation;
+           currentFilter = rec.topic.toLowerCase();
+           currentPage = 1;
+           
+           filterButtons.forEach((b) => {
+             if(b.dataset.filter === currentFilter) b.classList.add("active");
+             else b.classList.remove("active");
+           });
+           
+           renderProblems();
+           alert("AI Recommendation: " + rec.reason + "\n\n" + (rec.aiTip || ""));
+        } else {
+           alert("Could not get recommendation.");
+        }
+      } catch (err) {
+         console.error("AI recommend error:", err);
+         alert("Failed to fetch recommendation.");
+      } finally {
+         aiRecommendBtn.innerHTML = '<i class="fas fa-magic"></i> AI Recommend Next';
+         aiRecommendBtn.disabled = false;
+      }
+    });
+  }
+
   // Search bar
   const searchInput = document.getElementById("searchInput");
   const clearBtn = document.getElementById("clearSearchBtn");
@@ -986,7 +1340,9 @@ let currentFilter = 'all';
 let currentSearch = '';
 let paginationInitialized = false;
 
-// Get filtered problems
+let lastFilteredCacheKey = "";
+let lastFilteredProblems = [];
+
 function getFilteredProblems() {
   let filtered = practiceProblems;
   if (currentSearch) {
@@ -1000,60 +1356,53 @@ function getFilteredProblems() {
   return filtered;
 }
 
-let problemsVirtualList = null;
-
-// Render problems using VirtualList
 function renderProblems() {
   const filtered = getFilteredProblems();
   const totalProblems = filtered.length;
-  
+  const totalPages = Math.max(1, Math.ceil(totalProblems / PROBLEMS_PER_PAGE));
+
+  if (currentPage > totalPages) currentPage = totalPages;
+
+  const start = (currentPage - 1) * PROBLEMS_PER_PAGE;
+  const end = Math.min(start + PROBLEMS_PER_PAGE, totalProblems);
+  const pageProblems = filtered.slice(start, end);
+
   const visibleCountEl = document.getElementById('visible-count');
   const totalCountEl = document.getElementById('total-count');
-  if (visibleCountEl) visibleCountEl.textContent = totalProblems;
+  if (visibleCountEl) visibleCountEl.textContent = pageProblems.length;
   if (totalCountEl) totalCountEl.textContent = totalProblems;
-  
-  renderProblemCards(filtered);
+
+  renderProblemCards(pageProblems);
+  updatePaginationControls(currentPage, totalPages);
 }
 
-// Render problem cards via VirtualList
 function renderProblemCards(problems) {
   const problemsGrid = document.querySelector(".problems-grid");
   if (!problemsGrid) return;
-  
+
   const cpType = userProgress.codingPersonality ? userProgress.codingPersonality.type : "brute-force first";
-  
-  if (!problemsVirtualList) {
-    problemsVirtualList = new VirtualList({
-      container: problemsGrid,
-      items: problems,
-      isGrid: true,
-      itemHeight: 180, // Estimated problem card height
-      gap: 24,         // Grid gap
-      overscan: 4,
-      renderItem: (problem) => {
-        let isRec = false, recLabel = "";
-        if (cpType === "brute-force first") {
-          if (problem.difficulty === "easy" || problem.tags.includes("Arrays")) { isRec = true; recLabel = "Plan First!"; }
-        } else if (cpType === "over-optimizer") {
-          if (problem.difficulty === "hard" || problem.tags.includes("Dynamic Programming") || problem.tags.includes("Hash Table")) { isRec = true; recLabel = "Optimize Metrics"; }
-        } else if (cpType === "slow but accurate") {
-          if (problem.difficulty === "medium") { isRec = true; recLabel = "Speed Practice"; }
-        } else if (cpType === "greedy thinker") {
-          if (problem.tags.includes("Greedy") || problem.tags.includes("Divide and Conquer") || problem.tags.includes("Recursion")) { isRec = true; recLabel = "Heuristic Check"; }
-        }
-        const recBadge = isRec ? `<span class="rec-personality-badge"><i class="fas fa-brain"></i> ${recLabel}</span>` : "";
-        const isCompleted = userProgress.completedProblems.includes(problem.id);
-        const isFavorite = userProgress.favoriteProblems.includes(problem.id);
-        const hasNotes = userProgress.problemNotes && userProgress.problemNotes[problem.id];
-        
-        return `<div class="problem-card animate-in" data-id="${problem.id}"><div class="problem-header"><h3 class="problem-title">${recBadge}${problem.title}</h3><div class="problem-actions"><button class="favorite-btn ${isFavorite ? 'active' : ''}" data-id="${problem.id}" aria-label="Favorite problem"><i class="fas fa-heart"></i></button><button class="notes-btn ${hasNotes ? 'has-notes' : ''}" data-id="${problem.id}" aria-label="Problem notes"><i class="fas fa-sticky-note"></i></button><span class="difficulty-badge ${problem.difficulty}">${problem.difficulty}</span></div></div><div class="problem-tags">${problem.tags.map(tag => `<span class="tag">${tag}</span>`).join("")}</div><div class="problem-meta"><span class="acceptance-rate"><i class="fas fa-users"></i> ${problem.acceptance} acceptance</span>${isCompleted ? '<span class="completed-badge"><i class="fas fa-check"></i> Completed</span>' : ''}</div></div>`;
-      }
-    });
-  } else {
-    problemsVirtualList.updateItems(problems);
-  }
-  
-  // Use event delegation for problem cards (listeners are attached once).
+
+  const html = problems.map(problem => {
+    let isRec = false, recLabel = "";
+    if (cpType === "brute-force first") {
+      if (problem.difficulty === "easy" || problem.tags.includes("Arrays")) { isRec = true; recLabel = "Plan First!"; }
+    } else if (cpType === "over-optimizer") {
+      if (problem.difficulty === "hard" || problem.tags.includes("Dynamic Programming") || problem.tags.includes("Hash Table")) { isRec = true; recLabel = "Optimize Metrics"; }
+    } else if (cpType === "slow but accurate") {
+      if (problem.difficulty === "medium") { isRec = true; recLabel = "Speed Practice"; }
+    } else if (cpType === "greedy thinker") {
+      if (problem.tags.includes("Greedy") || problem.tags.includes("Divide and Conquer") || problem.tags.includes("Recursion")) { isRec = true; recLabel = "Heuristic Check"; }
+    }
+    const recBadge = isRec ? `<span class="rec-personality-badge"><i class="fas fa-brain"></i> ${recLabel}</span>` : "";
+    const isCompleted = userProgress.completedProblems.includes(problem.id);
+    const isFavorite = userProgress.favoriteProblems.includes(problem.id);
+    const hasNotes = userProgress.problemNotes && userProgress.problemNotes[problem.id];
+
+    return `<div class="problem-card animate-in" data-id="${problem.id}"><div class="problem-header"><h3 class="problem-title">${recBadge}${problem.title}</h3><div class="problem-actions"><button class="favorite-btn ${isFavorite ? 'active' : ''}" data-id="${problem.id}" aria-label="Favorite problem"><i class="fas fa-heart"></i></button><button class="notes-btn ${hasNotes ? 'has-notes' : ''}" data-id="${problem.id}" aria-label="Problem notes"><i class="fas fa-sticky-note"></i></button><span class="difficulty-badge ${problem.difficulty}">${problem.difficulty}</span></div></div><div class="problem-tags">${problem.tags.map(tag => `<span class="tag">${tag}</span>`).join("")}</div><div class="problem-meta"><span class="acceptance-rate"><i class="fas fa-users"></i> ${problem.acceptance} acceptance</span>${isCompleted ? '<span class="completed-badge"><i class="fas fa-check"></i> Completed</span>' : ''}</div></div>`;
+  }).join("");
+
+  problemsGrid.innerHTML = html;
+
   if (!problemsGrid.dataset.listenersAttached) {
     attachProblemGridEventDelegation(problemsGrid);
     problemsGrid.dataset.listenersAttached = "true";
@@ -1331,8 +1680,6 @@ function isRoadmapStepCompleted(step) {
   return step.problems.some(pid => userProgress.completedProblems.includes(pid));
 }
 
-let basicRoadmapVirtualList = null;
-
 function renderBasicRoadmap() {
   const timeline = document.getElementById("basicRoadmapTimeline");
   if (!timeline) return;
@@ -1344,36 +1691,29 @@ function renderBasicRoadmap() {
            step.theory.toLowerCase().includes(searchLower);
   });
 
-  if (!basicRoadmapVirtualList) {
-    basicRoadmapVirtualList = new VirtualList({
-      container: timeline,
-      items: filteredSteps,
-      isGrid: false,
-      itemHeight: 200, // Estimated timeline item height
-      gap: 32,
-      overscan: 4,
-      renderItem: (step) => {
-        const index = roadmapSteps.indexOf(step);
-        const isCompleted = isRoadmapStepCompleted(step);
-        let isUnlocked = index === 0 || isRoadmapStepCompleted(roadmapSteps[index - 1]);
-        let statusClass = "locked", statusText = "Locked", statusTagClass = "locked-tag";
-        if (isCompleted) { statusClass = "completed"; statusText = "Completed"; statusTagClass = "completed-tag"; }
-        else if (isUnlocked) { statusClass = "active"; statusText = "Active"; statusTagClass = "active-tag"; }
-        let progressPercent = 0, progressText = "";
-        if (step.type === "quiz") { progressPercent = isCompleted ? 100 : 0; progressText = isCompleted ? "Passed" : "Not Started"; }
-        else { const solved = step.problems.filter(pid => userProgress.completedProblems.includes(pid)).length; progressPercent = Math.round((solved / step.problems.length) * 100); progressText = `${solved}/${step.problems.length} Solved`; }
-        let stepIcon = `<i class="fa-solid ${step.icon}"></i>`;
-        if (isCompleted) stepIcon = `<i class="fa-solid fa-check"></i>`;
-        else if (statusClass === "locked") stepIcon = `<i class="fa-solid fa-lock"></i>`;
-        return `<div class="roadmap-step ${statusClass}" data-step="${step.id}"><div class="step-marker-dot">${stepIcon}</div><div class="roadmap-step-card"><div class="step-card-header"><span class="step-number">Step ${step.id}</span><span class="step-status-tag ${statusTagClass}">${statusText}</span></div><h3 class="step-title">${step.title}</h3><p class="step-desc">${step.desc}</p><div class="step-card-footer"><div class="step-progress"><div class="step-progress-label">Progress: ${progressText} (${progressPercent}%)</div><div class="step-progress-bar-container"><div class="step-progress-bar-fill" style="width: ${progressPercent}%;"></div></div></div>${isUnlocked ? `<button class="btn btn-primary btn-sm" onclick="openRoadmapStepModal(${index}, 'basic')">${isCompleted ? 'Review Step' : 'Start Step'}</button>` : `<button class="btn btn-secondary btn-sm" disabled><i class="fa-solid fa-lock"></i> Locked</button>`}</div></div></div>`;
-      }
-    });
-  } else {
-    basicRoadmapVirtualList.updateItems(filteredSteps);
+  if (filteredSteps.length === 0) {
+    timeline.innerHTML = `<div class="empty-state" style="text-align:center; padding:3rem; color:var(--text-secondary);"><p>No roadmap steps found matching "${currentRoadmapSearch}".</p></div>`;
+    return;
   }
-}
 
-let advancedRoadmapVirtualList = null;
+  let html = "";
+  filteredSteps.forEach((step) => {
+    const index = roadmapSteps.indexOf(step);
+    const isCompleted = isRoadmapStepCompleted(step);
+    let isUnlocked = index === 0 || isRoadmapStepCompleted(roadmapSteps[index - 1]);
+    let statusClass = "locked", statusText = "Locked", statusTagClass = "locked-tag";
+    if (isCompleted) { statusClass = "completed"; statusText = "Completed"; statusTagClass = "completed-tag"; }
+    else if (isUnlocked) { statusClass = "active"; statusText = "Active"; statusTagClass = "active-tag"; }
+    let progressPercent = 0, progressText = "";
+    if (step.type === "quiz") { progressPercent = isCompleted ? 100 : 0; progressText = isCompleted ? "Passed" : "Not Started"; }
+    else { const solved = step.problems.filter(pid => userProgress.completedProblems.includes(pid)).length; progressPercent = Math.round((solved / step.problems.length) * 100); progressText = `${solved}/${step.problems.length} Solved`; }
+    let stepIcon = `<i class="fa-solid ${step.icon}"></i>`;
+    if (isCompleted) stepIcon = `<i class="fa-solid fa-check"></i>`;
+    else if (statusClass === "locked") stepIcon = `<i class="fa-solid fa-lock"></i>`;
+    html += `<div class="roadmap-step ${statusClass}" data-step="${step.id}"><div class="step-marker-dot">${stepIcon}</div><div class="roadmap-step-card"><div class="step-card-header"><span class="step-number">Step ${step.id}</span><span class="step-status-tag ${statusTagClass}">${statusText}</span></div><h3 class="step-title">${step.title}</h3><p class="step-desc">${step.desc}</p><div class="step-card-footer"><div class="step-progress"><div class="step-progress-label">Progress: ${progressText} (${progressPercent}%)</div><div class="step-progress-bar-container"><div class="step-progress-bar-fill" style="width: ${progressPercent}%;"></div></div></div>${isUnlocked ? `<button class="btn btn-primary btn-sm" onclick="openRoadmapStepModal(${index}, 'basic')">${isCompleted ? 'Review Step' : 'Start Step'}</button>` : `<button class="btn btn-secondary btn-sm" disabled><i class="fa-solid fa-lock"></i> Locked</button>`}</div></div></div>`;
+  });
+  timeline.innerHTML = html;
+}
 
 function renderAdvancedRoadmap() {
   const timeline = document.getElementById("advancedRoadmapTimeline");
@@ -1386,33 +1726,28 @@ function renderAdvancedRoadmap() {
            step.theory.toLowerCase().includes(searchLower);
   });
 
-  if (!advancedRoadmapVirtualList) {
-    advancedRoadmapVirtualList = new VirtualList({
-      container: timeline,
-      items: filteredSteps,
-      isGrid: false,
-      itemHeight: 200,
-      gap: 32,
-      overscan: 4,
-      renderItem: (step) => {
-        const index = advancedRoadmapSteps.indexOf(step);
-        const isCompleted = isRoadmapStepCompleted(step);
-        let isUnlocked = index === 0 || isRoadmapStepCompleted(advancedRoadmapSteps[index - 1]);
-        let statusClass = "locked", statusText = "Locked", statusTagClass = "locked-tag";
-        if (isCompleted) { statusClass = "completed"; statusText = "Completed"; statusTagClass = "completed-tag"; }
-        else if (isUnlocked) { statusClass = "active"; statusText = "Active"; statusTagClass = "active-tag"; }
-        let progressPercent = 0, progressText = "";
-        if (step.type === "quiz") { progressPercent = isCompleted ? 100 : 0; progressText = isCompleted ? "Passed" : "Not Started"; }
-        else { const solved = step.problems.filter(pid => userProgress.completedProblems.includes(pid)).length; progressPercent = Math.round((solved / step.problems.length) * 100); progressText = `${solved}/${step.problems.length} Solved`; }
-        let stepIcon = `<i class="fa-solid ${step.icon}"></i>`;
-        if (isCompleted) stepIcon = `<i class="fa-solid fa-check"></i>`;
-        else if (statusClass === "locked") stepIcon = `<i class="fa-solid fa-lock"></i>`;
-        return `<div class="roadmap-step ${statusClass}" data-step="${step.id}"><div class="step-marker-dot">${stepIcon}</div><div class="roadmap-step-card"><div class="step-card-header"><span class="step-number">Step ${step.id}</span><span class="step-status-tag ${statusTagClass}">${statusText}</span></div><h3 class="step-title">${step.title}</h3><p class="step-desc">${step.desc}</p><div class="step-card-footer"><div class="step-progress"><div class="step-progress-label">Progress: ${progressText} (${progressPercent}%)</div><div class="step-progress-bar-container"><div class="step-progress-bar-fill" style="width: ${progressPercent}%;"></div></div></div>${isUnlocked ? `<button class="btn btn-primary btn-sm" onclick="openRoadmapStepModal(${index}, 'advanced')">${isCompleted ? 'Review Step' : 'Start Step'}</button>` : `<button class="btn btn-secondary btn-sm" disabled><i class="fa-solid fa-lock"></i> Locked</button>`}</div></div></div>`;
-      }
-    });
-  } else {
-    advancedRoadmapVirtualList.updateItems(filteredSteps);
+  if (filteredSteps.length === 0) {
+    timeline.innerHTML = `<div class="empty-state" style="text-align:center; padding:3rem; color:var(--text-secondary);"><p>No roadmap steps found matching "${currentRoadmapSearch}".</p></div>`;
+    return;
   }
+
+  let html = "";
+  filteredSteps.forEach((step) => {
+    const index = advancedRoadmapSteps.indexOf(step);
+    const isCompleted = isRoadmapStepCompleted(step);
+    let isUnlocked = index === 0 || isRoadmapStepCompleted(advancedRoadmapSteps[index - 1]);
+    let statusClass = "locked", statusText = "Locked", statusTagClass = "locked-tag";
+    if (isCompleted) { statusClass = "completed"; statusText = "Completed"; statusTagClass = "completed-tag"; }
+    else if (isUnlocked) { statusClass = "active"; statusText = "Active"; statusTagClass = "active-tag"; }
+    let progressPercent = 0, progressText = "";
+    if (step.type === "quiz") { progressPercent = isCompleted ? 100 : 0; progressText = isCompleted ? "Passed" : "Not Started"; }
+    else { const solved = step.problems.filter(pid => userProgress.completedProblems.includes(pid)).length; progressPercent = Math.round((solved / step.problems.length) * 100); progressText = `${solved}/${step.problems.length} Solved`; }
+    let stepIcon = `<i class="fa-solid ${step.icon}"></i>`;
+    if (isCompleted) stepIcon = `<i class="fa-solid fa-check"></i>`;
+    else if (statusClass === "locked") stepIcon = `<i class="fa-solid fa-lock"></i>`;
+    html += `<div class="roadmap-step ${statusClass}" data-step="${step.id}"><div class="step-marker-dot">${stepIcon}</div><div class="roadmap-step-card"><div class="step-card-header"><span class="step-number">Step ${step.id}</span><span class="step-status-tag ${statusTagClass}">${statusText}</span></div><h3 class="step-title">${step.title}</h3><p class="step-desc">${step.desc}</p><div class="step-card-footer"><div class="step-progress"><div class="step-progress-label">Progress: ${progressText} (${progressPercent}%)</div><div class="step-progress-bar-container"><div class="step-progress-bar-fill" style="width: ${progressPercent}%;"></div></div></div>${isUnlocked ? `<button class="btn btn-primary btn-sm" onclick="openRoadmapStepModal(${index}, 'advanced')">${isCompleted ? 'Review Step' : 'Start Step'}</button>` : `<button class="btn btn-secondary btn-sm" disabled><i class="fa-solid fa-lock"></i> Locked</button>`}</div></div></div>`;
+  });
+  timeline.innerHTML = html;
 }
 
 function openRoadmapStepModal(stepIndex, type = 'basic') {
@@ -1620,6 +1955,7 @@ function updateLeaderboard() {
     const resolvedCurrentUserId = currentUserId || getCurrentUserId();
     renderLeaderboardRows(buildLeaderboardRows(leaders, resolvedCurrentUserId), resolvedCurrentUserId);
   }).catch(error => {
+    if (error.name === 'AbortError') return;
     console.warn("Could not load leaderboard:", error);
     if (requestId !== leaderboardRequestId) return;
     renderLeaderboardRows(buildLeaderboardRows([], getCurrentUserId()), getCurrentUserId(), { emptyMessage: "Leaderboard unavailable." });
@@ -1628,9 +1964,13 @@ function updateLeaderboard() {
 
 async function loadLeaderboard() {
   if (location.protocol === "file:") return { leaders: [], currentUserId: null };
-  const response = await fetch("/api/leaderboard", { credentials: "include" });
-  if (!response.ok) throw new Error("Leaderboard request failed.");
-  return response.json();
+  const signal = apiAbort.getSignal('leaderboard');
+  try {
+    // Cache leaderboard data for 5 minutes (300000 ms) with stale-while-revalidate
+    return await apiCache.fetchWithCache("/api/leaderboard", { credentials: "include", signal }, 300000, 'json');
+  } finally {
+    apiAbort.clearSignal('leaderboard');
+  }
 }
 
 function buildLeaderboardRows(leaders = [], currentUserId = getCurrentUserId()) {
@@ -1639,8 +1979,8 @@ function buildLeaderboardRows(leaders = [], currentUserId = getCurrentUserId()) 
   const currentEntry = getCurrentLeaderboardEntry(currentUserId);
   if (currentUserId !== "local-user" || userProgress.xp > 350 || leaders.length === 0) rowsById.set(currentEntry.id, currentEntry);
   const rankedRows = Array.from(rowsById.values()).sort((a, b) => b.xp - a.xp || a.name.localeCompare(b.name)).map((leader, index) => ({ ...leader, rank: index + 1 }));
-  const visibleRows = rankedRows; // Remove LEADERBOARD_LIMIT slice to support virtualization
-  if (!visibleRows.some(leader => leader.id === currentEntry.id)) { const currentRow = rankedRows.find(leader => leader.id === currentEntry.id); if (currentRow) visibleRows.push(currentRow); }
+  const visibleRows = rankedRows.slice(0, LEADERBOARD_LIMIT);
+  if (!visibleRows.some(leader => leader.id === currentEntry.id)) { const currentRow = rankedRows.find(leader => leader.id === currentEntry.id); if (currentRow) visibleRows[visibleRows.length - 1] = currentRow; }
   return visibleRows;
 }
 
@@ -1652,30 +1992,11 @@ function getCurrentUserId() { return window.algoAuth?.user?.sub || window.algoAu
 
 function getCurrentDisplayName() { return window.algoAuth?.user?.name || cachedSession?.user?.name || userProgress.name || "Learner"; }
 
-let leaderboardVirtualList = null;
-
 function renderLeaderboardRows(rows, currentUserId = getCurrentUserId(), options = {}) {
   const leaderboardList = document.getElementById("leaderboardList");
   if (!leaderboardList) return;
-  
-  if (!leaderboardVirtualList) {
-    leaderboardVirtualList = new VirtualList({
-      container: leaderboardList,
-      items: rows,
-      isGrid: false,
-      itemHeight: 56, // Estimated height of a leaderboard row
-      gap: 12,
-      overscan: 10,
-      emptyMessage: `<p class="empty-state">${options.emptyMessage || "No leaderboard data yet."}</p>`,
-      renderItem: (user) => {
-        const isCurrentUser = user.id === currentUserId || (currentUserId === "local-user" && user.id === "local-user");
-        const displayName = isCurrentUser ? `${user.name} (You)` : user.name;
-        return `<div class="leaderboard-item ${isCurrentUser ? 'current-user' : ''}"><span class="leader-rank">#${user.rank}</span><span class="leader-avatar" aria-hidden="true">${escapeHtml(user.avatar)}</span><span class="leader-name">${escapeHtml(displayName)}</span><span class="leader-xp">${user.xp.toLocaleString()} XP</span></div>`;
-      }
-    });
-  } else {
-    leaderboardVirtualList.updateItems(rows);
-  }
+  if (!rows.length) { leaderboardList.innerHTML = `<p class="empty-state">${options.emptyMessage || "No leaderboard data yet."}</p>`; return; }
+  leaderboardList.innerHTML = rows.map(user => { const isCurrentUser = user.id === currentUserId || (currentUserId === "local-user" && user.id === "local-user"); const displayName = isCurrentUser ? `${user.name} (You)` : user.name; return `<div class="leaderboard-item ${isCurrentUser ? 'current-user' : ''}"><span class="leader-rank">#${user.rank}</span><span class="leader-avatar" aria-hidden="true">${escapeHtml(user.avatar)}</span><span class="leader-name">${escapeHtml(displayName)}</span><span class="leader-xp">${user.xp.toLocaleString()} XP</span></div>`; }).join("");
 }
 
 // ============================================
@@ -1948,6 +2269,10 @@ async function getAuthenticatedSession() {
   return cachedSession;
 }
 
+function initFlashcardsRevision() {
+  console.log("initFlashcardsRevision stub called");
+}
+
 function loadUserData() {
   try {
     const saved = localStorage.getItem("algoInfinityVerse");
@@ -2136,9 +2461,18 @@ function openQuizEditor(problem) {
   const editor = document.getElementById("codeEditor");
   const langSelect = document.getElementById("languageSelect");
   const lang = langSelect ? langSelect.value : "javascript";
+  const defaultCode = getDefaultCode(lang, problem);
   const savedDraft = getEditorDraft(problem.id);
   if (editor) {
-    editor.value = savedDraft !== null ? savedDraft : getDefaultCode(lang, problem);
+    let code = defaultCode;
+    if (savedDraft !== null) {
+      const draftSig = getEditorDraftSignature(problem.id);
+      const currentSig = getProblemSignature(problem);
+      const isStale = draftSig === null || draftSig !== currentSig;
+      code = isStale ? defaultCode : savedDraft;
+      if (isStale) clearEditorDraft(problem.id);
+    }
+    editor.value = code;
     editor.scrollTop = 0;
     editor.scrollLeft = 0;
     editor.dispatchEvent(new Event('input'));
@@ -2157,8 +2491,11 @@ function openQuizEditor(problem) {
 function mapType(jt, lang) {
   const m = {
     'int[]':  { java: 'int[]', cpp: 'vector<int>', c: 'int*', swift: '[Int]' },
+    'int[][]': { java: 'int[][]', cpp: 'vector<vector<int>>', c: 'int**', swift: '[[Int]]' },
     'string[]': { java: 'String[]', cpp: 'vector<string>', c: 'char**', swift: '[String]' },
+    'string[][]': { java: 'String[][]', cpp: 'vector<vector<string>>', c: 'char***', swift: '[[String]]' },
     'bool[]': { java: 'boolean[]', cpp: 'vector<bool>', c: 'int*', swift: '[Bool]' },
+    'bool[][]': { java: 'boolean[][]', cpp: 'vector<vector<bool>>', c: 'int**', swift: '[[Bool]]' },
     'int':    { java: 'int', cpp: 'int', c: 'int', swift: 'Int' },
     'string': { java: 'String', cpp: 'string', c: 'char*', swift: 'String' },
     'bool':   { java: 'boolean', cpp: 'bool', c: 'int', swift: 'Bool' },
@@ -2166,10 +2503,45 @@ function mapType(jt, lang) {
   return m[jt]?.[lang] || 'auto';
 }
 
+function getClassTemplate(lang, problem) {
+  const fnName = problem.functionName || "LRUCache";
+  const params = problem.params || [];
+
+  let docComment = '';
+  if (problem.guide) {
+    const lines = problem.guide.split('\n');
+    const prefix = lang === 'python' ? '# ' : '// ';
+    docComment = lines.map(l => prefix + l).join('\n') + '\n';
+  }
+
+  const paramStr = params.map((p, i) => {
+    const t = mapType('int', lang);
+    if (lang === 'cpp') return t + ' ' + p;
+    if (lang === 'java') return t + ' ' + p;
+    if (lang === 'swift') return '_ ' + p + ': ' + t;
+    return p;
+  }).join(', ');
+
+  const templates = {
+    javascript: docComment + `class ${fnName} {\n    constructor(${paramStr}) {\n        \n    }\n\n    get(key) {\n        \n    }\n\n    put(key, value) {\n        \n    }\n}`,
+    python: docComment + `class ${fnName}:\n    def __init__(self, ${params.join(', ')}):\n        pass\n\n    def get(self, key: int) -> int:\n        pass\n\n    def put(self, key: int, value: int) -> None:\n        pass\n`,
+    java: `class ${fnName} {\n${docComment.replace(/^(.)/gm, '    $1')}    public ${fnName}(${paramStr}) {\n        \n    }\n\n    public int get(int key) {\n        return 0;\n    }\n\n    public void put(int key, int value) {\n        \n    }\n}`,
+    cpp: `#include <unordered_map>\nusing namespace std;\n\n${docComment}class ${fnName} {\npublic:\n    ${fnName}(${paramStr}) {\n        \n    }\n\n    int get(int key) {\n        return 0;\n    }\n\n    void put(int key, int value) {\n        \n    }\n};`,
+    c: `${docComment}// Use a struct with function pointers:\ntypedef struct {\n    int capacity;\n} LRUCache;\n\nLRUCache* createLRUCache(int capacity) {\n    return NULL;\n}\n\nint get(LRUCache* cache, int key) {\n    return 0;\n}\n\nvoid put(LRUCache* cache, int key, int value) {\n    \n}`,
+    swift: docComment + `class ${fnName} {\n    init(${paramStr}) {\n        \n    }\n\n    func get(_ key: Int) -> Int {\n        return 0\n    }\n\n    func put(_ key: Int, _ value: Int) {\n        \n    }\n}`
+  };
+  return templates[lang] || templates.javascript;
+}
+
 function getDefaultCode(lang, problem) {
   const fnName = problem.functionName || "solution";
   const params = problem.params || [];
   const tc = problem.testCases?.[0];
+
+  const isClass = /^[A-Z]/.test(fnName);
+  if (isClass) {
+    return getClassTemplate(lang, problem);
+  }
 
   const paramTypes = tc?.input ? tc.input.map(v => mapType(j2t(v), lang)) : [];
   const retType = tc?.expected !== undefined ? mapType(j2t(tc.expected), lang) : 'auto';
@@ -2178,26 +2550,40 @@ function getDefaultCode(lang, problem) {
     ? params.map((p, i) => {
         const t = paramTypes[i] || 'auto';
         if (lang === 'cpp') return t + ' ' + p;
-        if (lang === 'c') return t + ' ' + p;
+        if (lang === 'c') {
+          const origJt = tc?.input ? j2t(tc.input[i]) : null;
+          const is2d = origJt === 'int[][]';
+          const isArray = origJt && origJt.endsWith('[]');
+          if (is2d) return t + ' ' + p + ', int* ' + p + 'Sizes, int ' + p + 'Size';
+          if (isArray) return t + ' ' + p + ', int ' + p + 'Size';
+          return t + ' ' + p;
+        }
         if (lang === 'java') return t + ' ' + p;
         if (lang === 'swift') return '_ ' + p + ': ' + t;
         return p;
       }).join(', ')
     : 'params';
 
+  let docComment = '';
+  if (problem.guide) {
+    const lines = problem.guide.split('\n');
+    const prefix = lang === 'python' ? '# ' : '// ';
+    docComment = lines.map(l => prefix + l).join('\n') + '\n';
+  }
+
   const templates = {
-    javascript: "function " + fnName + "(" + (params.join(', ') || 'params') + ") {\n    \n}",
-    python: "def " + fnName + "(" + (params.join(', ') || 'params') + "):\n    pass\n",
-    java: "class Solution {\n    public " + retType + " " + fnName + "(" + paramStr + ") {\n        \n    }\n}",
-    cpp: retType + " " + fnName + "(" + paramStr + ") {\n    \n}",
-    c: retType + " " + fnName + "(" + paramStr + ") {\n    \n}",
-    swift: "func " + fnName + "(" + paramStr + ") -> " + retType + " {\n    \n}"
+    javascript: docComment + "function " + fnName + "(" + (params.join(', ') || 'params') + ") {\n    \n}",
+    python: docComment + "def " + fnName + "(" + (params.join(', ') || 'params') + "):\n    pass\n",
+    java: "class Solution {\n" + docComment.replace(/^(.)/gm, '    $1') + "    public " + retType + " " + fnName + "(" + paramStr + ") {\n        \n    }\n}",
+    cpp: '#include <string>\n#include <stack>\nusing namespace std;\n\n' + docComment + retType + " " + fnName + "(" + paramStr + ") {\n    \n}",
+    c: '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <stdbool.h>\n\n' + docComment + retType + " " + fnName + "(" + paramStr + ") {\n    \n}",
+    swift: docComment + "func " + fnName + "(" + paramStr + ") -> " + retType + " {\n    \n}"
   };
   return templates[lang] || templates.javascript;
 }
 
 function generateExamples(problem) {
-  const examples = { 1: `<strong>Example 1:</strong><br>Input: nums = [2,7,11,15], target = 9<br>Output: [0,1]<br><br><strong>Follow-up:</strong> Can you solve it in O(n) using a Hash Map?`, 2: `<strong>Example 1:</strong><br>Input: s = "()"<br>Output: true<br><br><strong>Follow-up:</strong> Can you solve it in O(n) using a Stack?`, 3: `<strong>Example 1:</strong><br>Input: l1 = [1,2,4], l2 = [1,3,4]<br>Output: [1,1,2,3,4,4]<br><br><strong>Follow-up:</strong> Can you solve it both iteratively and recursively?`, 4: `<strong>Example 1:</strong><br>Input: nums = [-2,1,-3,4,-1,2,1,-5,4]<br>Output: 6<br><br><strong>Follow-up:</strong> Can you solve it using Kadane's Algorithm in O(n)?` };
+  const examples = { 1: `<strong>Example 1:</strong><br>Input: nums = [2,7,11,15], target = 9<br>Output: [0,1]<br><br><strong>Follow-up:</strong> Can you solve it in O(n) using a Hash Map?`, 2: `<strong>Example 1:</strong><br>Input: s = "()"<br>Output: true<br><br><strong>Follow-up:</strong> Can you solve it in O(n) using a Stack?`, 3: `<strong>Example 1:</strong><br>Input: list1 = [1,2,4], list2 = [1,3,4]<br>Output: [1,1,2,3,4,4]<br><br><strong>Follow-up:</strong> Can you solve it both iteratively and recursively?`, 4: `<strong>Example 1:</strong><br>Input: nums = [-2,1,-3,4,-1,2,1,-5,4]<br>Output: 6<br><br><strong>Follow-up:</strong> Can you solve it using Kadane's Algorithm in O(n)?`, 6: `<strong>Example 1:</strong><br>Input: adjList = [[2,4],[1,3],[2,4],[1,3]]<br>Output: [[2,4],[1,3],[2,4],[1,3]]<br><br><strong>Follow-up:</strong> Can you solve it using both BFS and DFS approaches?`, 7: `<strong>Example 1:</strong><br>Input: nums = [10,9,2,5,3,7,101,18]<br>Output: 4<br><br><strong>Follow-up:</strong> Can you improve from O(n²) to O(n log n) using binary search?`, 9: `<strong>Example 1:</strong><br>Input: height = [0,1,0,2,1,0,1,3,2,1,2,1]<br>Output: 6<br><br><strong>Follow-up:</strong> Can you solve it in O(n) time and O(1) space using the two-pointer technique?`, 10: `<strong>Example 1:</strong><br>Input: head = [1,2,3,4,5]<br>Output: [5,4,3,2,1]<br><br><strong>Follow-up:</strong> Can you solve it both iteratively and recursively?`, 11: `<strong>Example 1:</strong><br>Input: root = [4,2,7,1,3,6,9]<br>Output: [4,7,2,9,6,3,1]<br><br><strong>Follow-up:</strong> Can you solve it both recursively and iteratively using a queue or stack?` };
   return examples[problem.id] || "<strong>Example:</strong><br>Solve this problem";
 }
 
@@ -2252,25 +2638,29 @@ function clearQuizOutput() {
   if (el) el.innerHTML = '<p class="output-placeholder">Run your code to see output...</p>';
 }
 
-function buildHarnessCode(code, lang, functionName, testCases) {
+function buildHarnessCode(code, lang, functionName, testCases, problem) {
+  const isClass = problem ? /^[A-Z]/.test(problem.functionName || "") : /^[A-Z]/.test(functionName);
   const tcJson = JSON.stringify(testCases);
   if (lang === "javascript") {
-    return code + `\n\nconst __TC__ = ${tcJson};\nconst __RES__ = [];\nfor (let i = 0; i < __TC__.length; i++) {\n  const tc = __TC__[i];\n  try {\n    const result = ${functionName}(...tc.input);\n    const passed = JSON.stringify(result) === JSON.stringify(tc.expected);\n    __RES__.push({ index: i, ran: true, passed, actual: result, expected: tc.expected, input: tc.input, error: null });\n  } catch (e) {\n    __RES__.push({ index: i, ran: true, passed: false, actual: null, expected: tc.expected, input: tc.input, error: e.message });\n  }\n}\nconsole.log("__RESULT__:" + JSON.stringify(__RES__));`;
+    const clsCheck = isClass ? 'true' : 'false';
+    return code + `\n\nconst __TC__ = ${tcJson};\nconst __RES__ = [];\nfor (let i = 0; i < __TC__.length; i++) {\n  const tc = __TC__[i];\n  try {\n    const result = ${clsCheck} ? new ${functionName}(...tc.input) : ${functionName}(...tc.input);\n    const passed = ${clsCheck} ? true : JSON.stringify(result) === JSON.stringify(tc.expected);\n    __RES__.push({ index: i, ran: true, passed, actual: ${clsCheck} ? "instance" : result, expected: tc.expected, input: tc.input, error: null });\n  } catch (e) {\n    __RES__.push({ index: i, ran: true, passed: false, actual: null, expected: tc.expected, input: tc.input, error: e.message });\n  }\n}\nconsole.log("__RESULT__:" + JSON.stringify(__RES__));`;
   }
   if (lang === "python") {
-    return `${code}\n\nimport json\n__TC__ = ${tcJson}\n__RES__ = []\nfor i, tc in enumerate(__TC__):\n    try:\n        result = ${functionName}(*tc["input"])\n        passed = json.dumps(result, default=str) == json.dumps(tc["expected"], default=str)\n        __RES__.append({"index": i, "ran": True, "passed": passed, "actual": result, "expected": tc["expected"], "input": tc["input"], "error": None})\n    except Exception as e:\n        __RES__.append({"index": i, "ran": True, "passed": False, "actual": None, "expected": tc["expected"], "input": tc["input"], "error": str(e)})\nprint("__RESULT__:" + json.dumps(__RES__, default=str))`;
+    const esc = tcJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const clsCheck = isClass ? 'True' : 'False';
+    return `${code}\n\nimport json\n__TC__ = json.loads('${esc}')\n__RES__ = []\nfor i, tc in enumerate(__TC__):\n    try:\n        result = ${functionName}(*tc["input"])\n        passed = True if ${clsCheck} else json.dumps(result, default=str) == json.dumps(tc["expected"], default=str)\n        __RES__.append({"index": i, "ran": True, "passed": passed, "actual": str(result) if ${clsCheck} else result, "expected": tc["expected"], "input": tc["input"], "error": None})\n    except Exception as e:\n        __RES__.append({"index": i, "ran": True, "passed": False, "actual": None, "expected": tc["expected"], "input": tc["input"], "error": str(e)})\nprint("__RESULT__:" + json.dumps(__RES__, default=str))`;
   }
   if (lang === "cpp") {
-    return genCppHarness(code, functionName, testCases);
+    return genCppHarness(code, functionName, testCases, isClass);
   }
   if (lang === "java") {
-    return genJavaHarness(code, functionName, testCases);
+    return genJavaHarness(code, functionName, testCases, isClass);
   }
   if (lang === "c") {
-    return genCHarness(code, functionName, testCases);
+    return genCHarness(code, functionName, testCases, isClass);
   }
   if (lang === "swift") {
-    return genSwiftHarness(code, functionName, testCases);
+    return genSwiftHarness(code, functionName, testCases, isClass);
   }
   return code;
 }
@@ -2280,10 +2670,8 @@ function j2t(v) {
   if (Array.isArray(v)) {
     if (v.length === 0) return 'int[]';
     const inner = j2t(v[0]);
-    if (inner === 'int') return 'int[]';
-    if (inner === 'string') return 'string[]';
-    if (inner === 'bool') return 'bool[]';
-    return 'int[]';
+    if (inner === 'null') return 'int[]';
+    return inner + '[]';
   }
   if (typeof v === 'number') return 'int';
   if (typeof v === 'string') return 'string';
@@ -2292,17 +2680,20 @@ function j2t(v) {
 }
 
 function valToLit(v, t) {
-  if (t === 'int[]') return '[' + v.map(x => x).join(',') + ']';
+  if (t === 'int[]') return '[' + v.map(x => x === null || x === undefined ? 0 : x).join(',') + ']';
   if (t === 'string') return '"' + String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
   if (t === 'bool') return v ? 'true' : 'false';
+  if (t === 'string[]') return '[' + v.map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + ']';
+  if (t === 'string[][]') return '[' + v.map(row => '[' + row.map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + ']').join(',') + ']';
   return String(v);
 }
 
-function genCppHarness(code, fn, tcs) {
+function genCppHarness(code, fn, tcs, isClass) {
   const outType = j2t(tcs[0].expected);
   const inTypes = tcs[0].input.map(v => j2t(v));
   let s = '#include <iostream>\n#include <string>\n#include <vector>\n#include <sstream>\nusing namespace std;\n\n';
   s += code + '\n\n';
+  s += 'string __j(bool v) { return v ? "true" : "false"; }\n';
   s += 'string __j(int v) { return to_string(v); }\n';
   s += 'string __j(const string& v) { return "\\"" + v + "\\""; }\n';
   s += 'template<typename T>\nstring __j(const vector<T>& v) {\n  if (v.empty()) return "[]";\n  stringstream ss;\n  ss << "[" << __j(v[0]);\n  for (size_t i=1;i<v.size();i++) ss << "," << __j(v[i]);\n  ss << "]";\n  return ss.str();\n}\n';
@@ -2313,14 +2704,19 @@ function genCppHarness(code, fn, tcs) {
     let callArgs = '';
     for (let j = 0; j < inTypes.length; j++) {
       if (j > 0) callArgs += ', ';
-      if (inTypes[j] === 'int[]') callArgs += 'vector<int>{' + tcs[i].input[j].map(x => x).join(',') + '}';
+      if (inTypes[j] === 'int[]') callArgs += 'vector<int>{' + tcs[i].input[j].map(x => x === null || x === undefined ? 0 : x).join(',') + '}';
+      else if (inTypes[j] === 'int[][]') callArgs += 'vector<vector<int>>{' + tcs[i].input[j].map(row => '{' + row.join(',') + '}').join(',') + '}';
+      else if (inTypes[j] === 'string[]') callArgs += 'vector<string>{' + tcs[i].input[j].map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}';
+      else if (inTypes[j] === 'string[][]') callArgs += 'vector<vector<string>>{' + tcs[i].input[j].map(row => '{' + row.map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}').join(',') + '}';
       else callArgs += valToLit(tcs[i].input[j], inTypes[j]);
     }
     s += '    auto __r = ' + fn + '(' + callArgs + ');\n';
     s += '    cout << "{\\"index\\":' + i + ',\\"ran\\":true,\\"passed\\":";\n';
-    let compExpr = '';
+    let compExpr = '"false"';
     if (outType === 'int[]') {
-      compExpr = '(__r == vector<int>{' + tcs[i].expected.map(x => x).join(',') + '} ? "true" : "false")';
+      compExpr = '(__r == vector<int>{' + tcs[i].expected.map(x => x === null || x === undefined ? 0 : x).join(',') + '} ? "true" : "false")';
+    } else if (outType === 'int[][]') {
+      compExpr = '(__r == vector<vector<int>>{' + tcs[i].expected.map(row => '{' + row.join(',') + '}').join(',') + '} ? "true" : "false")';
     } else if (outType === 'int') {
       compExpr = '(__r == ' + valToLit(tcs[i].expected, outType) + ' ? "true" : "false")';
     } else if (outType === 'string') {
@@ -2341,13 +2737,19 @@ function genCppHarness(code, fn, tcs) {
   return s;
 }
 
-function genJavaHarness(code, fn, tcs) {
+function genJavaHarness(code, fn, tcs, isClass) {
   const outType = j2t(tcs[0].expected);
   const inTypes = tcs[0].input.map(v => j2t(v));
+  const javaType = outType === 'int[]' ? 'int[]' : outType === 'int[][]' ? 'int[][]' : outType === 'string' ? 'String' : outType === 'bool' ? 'boolean' : 'int';
   let s = code + '\n\nclass Main {\n';
-  if (outType === 'int[]') {
-    s += '  static String __j(int[] v) {\n    if (v == null) return "null";\n    StringBuilder sb = new StringBuilder("[");\n    for (int i = 0; i < v.length; i++) { if (i > 0) sb.append(","); sb.append(v[i]); }\n    sb.append("]");\n    return sb.toString();\n  }\n';
-    s += '  static boolean __eq(int[] a, int[] b) {\n    if (a == null && b == null) return true;\n    if (a == null || b == null || a.length != b.length) return false;\n    for (int i = 0; i < a.length; i++) if (a[i] != b[i]) return false;\n    return true;\n  }\n';
+  s += '  static String __j(boolean v) { return String.valueOf(v); }\n';
+  s += '  static String __j(int v) { return String.valueOf(v); }\n';
+  s += '  static String __j(String v) { return v == null ? "null" : "\\"" + v + "\\""; }\n';
+  s += '  static String __j(int[] v) {\n    if (v == null) return "null";\n    StringBuilder sb = new StringBuilder("[");\n    for (int i = 0; i < v.length; i++) { if (i > 0) sb.append(","); sb.append(v[i]); }\n    sb.append("]");\n    return sb.toString();\n  }\n';
+  s += '  static boolean __eq(int[] a, int[] b) {\n    if (a == null && b == null) return true;\n    if (a == null || b == null || a.length != b.length) return false;\n    for (int i = 0; i < a.length; i++) if (a[i] != b[i]) return false;\n    return true;\n  }\n';
+  if (outType === 'int[][]') {
+    s += '  static String __j(int[][] v) {\n    if (v == null) return "null";\n    StringBuilder sb = new StringBuilder("[");\n    for (int i = 0; i < v.length; i++) { if (i > 0) sb.append(","); sb.append(__j(v[i])); }\n    sb.append("]");\n    return sb.toString();\n  }\n';
+    s += '  static boolean __eq(int[][] a, int[][] b) {\n    if (a == null && b == null) return true;\n    if (a == null || b == null || a.length != b.length) return false;\n    for (int i = 0; i < a.length; i++) if (!__eq(a[i], b[i])) return false;\n    return true;\n  }\n';
   }
   s += '  public static void main(String[] args) {\n    StringBuilder __res = new StringBuilder("[");\n';
   for (let i = 0; i < tcs.length; i++) {
@@ -2356,12 +2758,18 @@ function genJavaHarness(code, fn, tcs) {
     let callArgs = '';
     for (let j = 0; j < inTypes.length; j++) {
       if (j > 0) callArgs += ', ';
-      if (inTypes[j] === 'int[]') callArgs += 'new int[]{' + tcs[i].input[j].map(x => x).join(',') + '}';
+      if (inTypes[j] === 'int[]') callArgs += 'new int[]{' + tcs[i].input[j].map(x => x === null || x === undefined ? 0 : x).join(',') + '}';
+      else if (inTypes[j] === 'int[][]') callArgs += 'new int[][]{' + tcs[i].input[j].map(row => '{' + row.join(',') + '}').join(',') + '}';
+      else if (inTypes[j] === 'string[]') callArgs += 'new String[]{' + tcs[i].input[j].map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}';
+      else if (inTypes[j] === 'string[][]') callArgs += 'new String[][]{' + tcs[i].input[j].map(row => '{' + row.map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}').join(',') + '}';
       else callArgs += valToLit(tcs[i].input[j], inTypes[j]);
     }
-    s += '      int[] __r = new Solution().' + fn + '(' + callArgs + ');\n';
+    s += '      ' + javaType + ' __r = new Solution().' + fn + '(' + callArgs + ');\n';
+    let pExpr = 'false';
     if (outType === 'int[]') {
-      s += '      boolean __p = __eq(__r, new int[]{' + tcs[i].expected.map(x => x).join(',') + '});\n';
+      pExpr = '__eq(__r, new int[]{' + tcs[i].expected.map(x => x === null || x === undefined ? 0 : x).join(',') + '})';
+    } else if (outType === 'int[][]') {
+      s += '      boolean __p = __eq(__r, new int[][]{' + tcs[i].expected.map(row => '{' + row.join(',') + '}').join(',') + '});\n';
     } else {
       s += '      boolean __p = __r == ' + valToLit(tcs[i].expected, outType) + ';\n';
     }
@@ -2374,62 +2782,137 @@ function genJavaHarness(code, fn, tcs) {
   return s;
 }
 
-function genCHarness(code, fn, tcs) {
+function genCHarness(code, fn, tcs, isClass) {
   const outType = j2t(tcs[0].expected);
   const inTypes = tcs[0].input.map(v => j2t(v));
-  let s = '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n';
+  let s = '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <stdbool.h>\n\n';
   s += code + '\n\n';
   if (outType === 'int[]') {
     s += 'void __j(int* v, int n, char* buf) {\n  if (v == NULL) { strcpy(buf, "null"); return; }\n  buf[0] = \'[\'; int pos = 1;\n  for (int i = 0; i < n; i++) { if (i > 0) buf[pos++] = \',\'; pos += sprintf(buf + pos, "%d", v[i]); }\n  buf[pos++] = \']\'; buf[pos] = 0;\n}\n';
-    s += 'int __eq(int* a, int* b, int n) {\n  if (a == NULL && b == NULL) return 1;\n  if (a == NULL || b == NULL) return 0;\n  for (int i = 0; i < n; i++) if (a[i] != b[i]) return 0;\n  return 1;\n}\n';
+    s += 'int __eq(int* a, int* b, int n) {\n  if (n == 0) return 1;\n  if (a == NULL && b == NULL) return 1;\n  if (a == NULL || b == NULL) return 0;\n  for (int i = 0; i < n; i++) if (a[i] != b[i]) return 0;\n  return 1;\n}\n';
+  }
+  if (outType === 'int[][]') {
+    s += 'void __j(int** v, int* sizes, int n, char* buf) {\n  if (v == NULL) { strcpy(buf, "null"); return; }\n  buf[0] = \'[\'; int pos = 1;\n  for (int i = 0; i < n; i++) {\n    if (i > 0) buf[pos++] = \',\';\n    buf[pos++] = \'[\';\n    for (int j = 0; j < sizes[i]; j++) {\n      if (j > 0) buf[pos++] = \',\';\n      pos += sprintf(buf + pos, "%d", v[i][j]);\n    }\n    buf[pos++] = \']\';\n  }\n  buf[pos++] = \']\'; buf[pos] = 0;\n}\n';
+    s += 'int __eq(int** a, int* aSizes, int aLen, int** b, int* bSizes, int bLen) {\n  if (a == NULL && b == NULL) return 1;\n  if (a == NULL || b == NULL || aLen != bLen) return 0;\n  for (int i = 0; i < aLen; i++) {\n    if (aSizes[i] == 0 && bSizes[i] == 0) continue;\n    if (a[i] == NULL || b[i] == NULL || aSizes[i] != bSizes[i]) return 0;\n    for (int j = 0; j < aSizes[i]; j++) if (a[i][j] != b[i][j]) return 0;\n  }\n  return 1;\n}\n';
   }
   s += 'int main() {\n  printf("__RESULT__:[");\n';
   for (let i = 0; i < tcs.length; i++) {
     if (i > 0) s += '  printf(",");\n';
     s += '  {\n';
-    s += '  printf("{\\"index\\":' + i + ',\\"ran\\":true,\\"passed\\":");\n';
     let callArgs = '';
     for (let j = 0; j < inTypes.length; j++) {
       if (j > 0) callArgs += ', ';
       if (inTypes[j] === 'int[]') {
         const arr = tcs[i].input[j];
-        callArgs += '(int[]){' + arr.map(x => x).join(',') + '}';
+        if (arr.length === 0) {
+          callArgs += 'NULL, 0';
+        } else {
+          callArgs += '(int[]){' + arr.map(x => x).join(',') + '}, ' + arr.length;
+        }
+      } else if (inTypes[j] === 'int[][]') {
+        const arr = tcs[i].input[j];
+        if (arr.length === 0) {
+          callArgs += 'NULL, NULL, 0';
+        } else {
+          const rows = arr.map(row => row.length === 0 ? 'NULL' : '(int[]){' + row.join(',') + '}').join(',');
+          const sizes = arr.map(row => row.length).join(',');
+          callArgs += '(int*[]){' + rows + '}, (int[]){' + sizes + '}, ' + arr.length;
+        }
+      } else if (inTypes[j] === 'string[]') {
+        const arr = tcs[i].input[j];
+        callArgs += '(char*[]){' + arr.map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}, ' + arr.length;
+      } else if (inTypes[j] === 'string[][]') {
+        const arr = tcs[i].input[j];
+        if (arr.length === 0) {
+          callArgs += 'NULL, NULL, 0';
+        } else {
+          const rows = arr.map(row => row.length === 0 ? 'NULL' : '(char*[]){' + row.map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}').join(',');
+          const sizes = arr.map(row => row.length).join(',');
+          callArgs += '(char***){' + rows + '}, (int[]){' + sizes + '}, ' + arr.length;
+        }
       } else callArgs += valToLit(tcs[i].input[j], inTypes[j]);
     }
-    const expLen = Array.isArray(tcs[i].expected) ? tcs[i].expected.length : 1;
-    s += '  int* __r = ' + fn + '(' + callArgs + ');\n';
-    s += '  int __p = __eq(__r, (int[]){' + tcs[i].expected.map(x => x).join(',') + '}, ' + expLen + ');\n';
-    s += '  printf(__p ? "true" : "false");\n';
-    s += '  printf(",\\"actual\\":");\n';
-    s += '  char __buf[256]; __j(__r, ' + expLen + ', __buf); printf("%s", __buf);\n';
-    s += '  printf("}");\n';
+    if (isClass) {
+      s += '  printf("{\\"index\\":' + i + ',\\"ran\\":true,\\"passed\\":true,\\"actual\\":\\"instance\\"}");\n';
+    } else if (outType === 'int[]') {
+      const exp = tcs[i].expected;
+      const expLen = Array.isArray(exp) ? exp.length : 1;
+      s += '  printf("{\\"index\\":' + i + ',\\"ran\\":true,\\"passed\\":");\n';
+      s += '  int* __r = ' + fn + '(' + callArgs + ');\n';
+      if (expLen === 0) {
+        s += '  int __p = __eq(__r, NULL, 0);\n';
+      } else {
+        s += '  int __p = __eq(__r, (int[]){' + exp.map(x => x === null || x === undefined ? 0 : x).join(',') + '}, ' + expLen + ');\n';
+      }
+      s += '  printf(__p ? "true" : "false");\n  printf(",\\"actual\\":");\n  char __buf[256]; __j(__r, ' + expLen + ', __buf); printf("%s", __buf);\n  printf("}");\n';
+    } else if (outType === 'int[][]') {
+      const exp2d = tcs[i].expected;
+      const expLen = exp2d.length;
+      s += '  int** __r = ' + fn + '(' + callArgs + ');\n';
+      if (expLen === 0) {
+        s += '  int __p = 1;\n';
+        s += '  printf("true");\n  printf(",\\"actual\\":[]");\n  printf("}");\n';
+      } else {
+        const expRows = exp2d.map(row => row.length === 0 ? 'NULL' : '(int[]){' + row.join(',') + '}').join(',');
+        const expSizes = exp2d.map(row => row.length).join(',');
+        s += '  int __p = __eq(__r, (int[]){' + expSizes + '}, ' + expLen + ', (int*[]){' + expRows + '}, (int[]){' + expSizes + '}, ' + expLen + ');\n';
+        s += '  printf(__p ? "true" : "false");\n  printf(",\\"actual\\":");\n  char __buf[1024]; __j(__r, (int[]){' + expSizes + '}, ' + expLen + ', __buf); printf("%s", __buf);\n  printf("}");\n';
+      }
+    } else {
+      const cType = outType === 'string' ? 'char*' : 'int';
+      s += '  printf("{\\"index\\":' + i + ',\\"ran\\":true,\\"passed\\":");\n';
+      s += '  ' + cType + ' __r = ' + fn + '(' + callArgs + ');\n';
+      if (outType === 'string') {
+        const expStr = valToLit(tcs[i].expected, outType);
+        s += '  int __p = __r && ' + expStr + ' && strcmp(__r, ' + expStr + ') == 0;\n';
+      } else {
+        s += '  int __p = __r == ' + valToLit(tcs[i].expected, outType) + ';\n';
+      }
+      s += '  printf(__p ? "true" : "false");\n  printf(",\\"actual\\":");\n';
+      if (outType === 'string') s += '  printf(__r ? "\\"%s\\"" : "null", __r);\n';
+      else if (outType === 'bool') s += '  printf(__r ? "true" : "false");\n';
+      else s += '  printf("%d", __r);\n';
+      s += '  printf("}");\n';
+    }
     s += '  }\n';
   }
   s += '  printf("]\\n");\n  return 0;\n}\n';
   return s;
 }
 
-function genSwiftHarness(code, fn, tcs) {
+function genSwiftHarness(code, fn, tcs, isClass) {
   const outType = j2t(tcs[0].expected);
+  const inTypes = tcs[0].input.map(v => j2t(v));
   let s = 'import Foundation\n\n';
   s += code + '\n\n';
-  if (outType === 'int[]') {
+  s += 'func __j(_ v: Int) -> String { return String(v) }\n';
+  s += 'func __j(_ v: Bool) -> String { return v ? "true" : "false" }\n';
+  s += 'func __j(_ v: String) -> String { return "\\"\\(v)\\"" }\n';
+  if (outType === 'int[]' || outType === 'int[][]') {
     s += 'func __j(_ v: [Int]) -> String {\n  if v.isEmpty { return "[]" }\n  return "[" + v.map(String.init).joined(separator: ",") + "]"\n}\n';
+  }
+  if (outType === 'int[][]') {
+    s += 'func __j(_ v: [[Int]]) -> String {\n  return "[" + v.map { __j($0) }.joined(separator: ",") + "]"\n}\n';
   }
   s += 'var __res = "["\n';
   for (let i = 0; i < tcs.length; i++) {
     if (i > 0) s += '__res += ","\n';
     s += 'do {\n';
     let callArgs = '';
-    const inTypes = tcs[i].input.map(v => j2t(v));
     for (let j = 0; j < inTypes.length; j++) {
       if (j > 0) callArgs += ', ';
-      if (inTypes[j] === 'int[]') callArgs += '[' + tcs[i].input[j].map(x => x).join(',') + '] as [Int]';
+      if (inTypes[j] === 'int[]') callArgs += '[' + tcs[i].input[j].map(x => x === null || x === undefined ? 0 : x).join(',') + '] as [Int]';
+      else if (inTypes[j] === 'int[][]') callArgs += '[' + tcs[i].input[j].map(row => '[' + row.join(',') + ']').join(',') + '] as [[Int]]';
+      else if (inTypes[j] === 'string[]') callArgs += '[' + tcs[i].input[j].map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '] as [String]';
+      else if (inTypes[j] === 'string[][]') callArgs += '[' + tcs[i].input[j].map(row => '[' + row.map(x => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + ']').join(',') + '] as [[String]]';
       else callArgs += valToLit(tcs[i].input[j], inTypes[j]);
     }
     s += '  let __r = ' + fn + '(' + callArgs + ')\n';
+    let pExpr = 'false';
     if (outType === 'int[]') {
-      s += '  let __p = __r == [' + tcs[i].expected.map(x => x).join(',') + ']\n';
+      pExpr = '__r == [' + tcs[i].expected.map(x => x === null || x === undefined ? 0 : x).join(',') + ']';
+    } else if (outType === 'int[][]') {
+      s += '  let __p = __r == [' + tcs[i].expected.map(row => '[' + row.join(',') + ']').join(',') + ']\n';
     } else {
       s += '  let __p = __r == ' + valToLit(tcs[i].expected, outType) + '\n';
     }
@@ -2464,48 +2947,50 @@ const API_BASE = (location.hostname === 'localhost' || location.hostname === '12
   : '';
 
 async function executeViaApi(lang, code) {
-  const resp = await fetch(`${API_BASE}/api/execute`, {
+  // Make sure this points to your new secure Node.js route
+  const response = await fetch(`${API_BASE}/api/execute`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_code: code, language: lang, stdin: "" })
+    body: JSON.stringify({ 
+      sourceCode: code, 
+      language: lang, 
+      stdin: "" 
+    })
   });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: "Execution API error (" + resp.status + ")" }));
-    throw new Error(err.error);
+  
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ message: "Execution API error (" + response.status + ")" }));
+    throw new Error(err.message || "Failed to execute code");
   }
-  const data = await resp.json();
-  if (data.code !== 0) {
-    throw new Error(data.stderr || "Execution failed");
+  
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.message || "Execution failed");
   }
-  return { stdout: data.stdout || "", stderr: data.stderr || "" };
+
+  // JDoodle returns output directly
+  return { 
+    stdout: result.data.output || "", 
+    stderr: "", // JDoodle merges stderr into output
+    memory: result.data.memory,
+    cpuTime: result.data.cpuTime
+  };
 }
 
 function parseTestResults(stdout, testCount) {
   const marker = "__RESULT__:";
-  const markerIdx = stdout.indexOf(marker);
-  if (markerIdx !== -1) {
-    const jsonStart = markerIdx + marker.length;
-    let depth = 0;
-    let jsonEnd = -1;
-    for (let i = jsonStart; i < stdout.length; i++) {
-      if (stdout[i] === "[") depth++;
-      else if (stdout[i] === "]") {
-        depth--;
-        if (depth === 0) { jsonEnd = i + 1; break; }
-      }
-    }
-    if (jsonEnd === -1) jsonEnd = stdout.length;
-    const jsonStr = stdout.substring(jsonStart, jsonEnd);
+  const pos = stdout.lastIndexOf(marker);
+  if (pos !== -1) {
+    const raw = stdout.substring(0, pos).trim();
+    const json = stdout.substring(pos + marker.length).trim();
     try {
-      const testResults = JSON.parse(jsonStr);
+      const parsed = JSON.parse(json);
+      const testResults = Array.isArray(parsed) ? parsed : [];
       const allPassed = testResults.length > 0 && testResults.every(r => r.passed);
-      const cleanOutput = (stdout.substring(0, markerIdx) + stdout.substring(jsonEnd)).trim();
-      return { allPassed, testResults, rawOutput: cleanOutput };
-    } catch (e) {
-      return { allPassed: false, testResults: Array(testCount).fill({ ran: false, passed: false, error: "Failed to parse test results" }), rawOutput: stdout };
-    }
+      return { allPassed, testResults, rawOutput: raw };
+    } catch (e) { /* fall through */ }
   }
-  return { allPassed: false, testResults: Array(testCount).fill({ ran: false, passed: false, error: "No test result marker found in output" }), rawOutput: stdout };
+  return { allPassed: false, testResults: Array(testCount).fill({ ran: false, passed: false, error: "No test result marker found" }), rawOutput: stdout };
 }
 
 async function executeCode(code, lang, problem) {
@@ -2513,29 +2998,35 @@ async function executeCode(code, lang, problem) {
   if (!testCases || testCases.length === 0) {
     return { allPassed: false, testResults: [], rawOutput: "This problem has no automated test cases." };
   }
+  
   const fnName = problem.functionName || "solution";
-  const harnessCode = buildHarnessCode(code, lang, fnName, testCases);
-  let stdout = "", stderr = "";
-  if (lang === "javascript") {
-    try {
-      const result = await runWorker(harnessCode, 5000);
-      if (!result.success) {
-        return { allPassed: false, testResults: testCases.map(() => ({ ran: false, passed: false, error: result.error })), rawOutput: (result.logs || []).join("\n") };
-      }
-      stdout = (result.logs || []).join("\n");
-    } catch (e) {
-      return { allPassed: false, testResults: testCases.map(() => ({ ran: false, passed: false, error: e.message })), rawOutput: e.message };
-    }
-  } else {
-    try {
-      const result = await executeViaApi(lang, harnessCode);
-      stdout = result.stdout;
-      stderr = result.stderr;
-    } catch (e) {
-      return { allPassed: false, testResults: testCases.map(() => ({ ran: false, passed: false, error: e.message })), rawOutput: e.message };
-    }
+  const harnessCode = buildHarnessCode(code, lang, fnName, testCases, problem);
+  
+  let stdout = "", stderr = "", memory = "", cpuTime = "";
+  
+  // We now route ALL languages (including JS) through our real API for consistency and real limits
+  try {
+    const result = await executeViaApi(lang, harnessCode);
+    stdout = result.stdout;
+    memory = result.memory;
+    cpuTime = result.cpuTime;
+  } catch (e) {
+    return { 
+      allPassed: false, 
+      testResults: testCases.map(() => ({ ran: false, passed: false, error: e.message })), 
+      rawOutput: e.message 
+    };
   }
-  return parseTestResults(stdout, testCases.length);
+  
+  const parsedResults = parseTestResults(stdout, testCases.length);
+  
+  // Attach performance metrics to the result object
+  parsedResults.metrics = {
+    memory: memory || "N/A",
+    cpuTime: cpuTime || "N/A"
+  };
+  
+  return parsedResults;
 }
 
 function setOutput(text, type) {
@@ -2547,7 +3038,10 @@ function setOutput(text, type) {
   else el.innerHTML = '<pre>' + text + '</pre>';
 }
 
+let _running = false;
+
 async function runQuizCode() {
+  if (_running) return;
   const editor = document.getElementById("codeEditor");
   if (!editor) return;
   const code = editor.value;
@@ -2563,24 +3057,45 @@ async function runQuizCode() {
   }
   renderTestCases(testCases);
   setOutput("", "running");
+  _running = true;
   try {
     const result = await executeCode(code, lang, problem);
+    if (!result.testResults || !Array.isArray(result.testResults)) {
+      setOutput("Execution returned no test results.", "error");
+      return;
+    }
     renderTestCases(testCases, result.testResults);
     if (result.allPassed) {
       setOutput("All tests passed!", "success");
     } else {
-      const failures = result.testResults.filter(r => !r.passed);
+      const failures = result.testResults.filter(r => r && !r.passed);
       const failMsg = failures.length + " / " + result.testResults.length + " tests failed";
       const out = result.rawOutput ? failMsg + "\n\nConsole output:\n" + result.rawOutput : failMsg;
       setOutput(out, "error");
     }
+    if (result.metrics && result.metrics.cpuTime) {
+      const metricText = `\n\n⏱️ Execution Time: ${result.metrics.cpuTime} sec\n💾 Memory Used: ${result.metrics.memory} KB`;
+      const el = document.getElementById("quizOutputContent");
+      if (el) el.innerHTML += `<pre style="color:var(--accent); margin-top:10px;">${metricText}</pre>`;
+      if (el) {
+        const metricsEl = document.createElement("pre");
+        metricsEl.style.color = "var(--accent)";
+        metricsEl.style.marginTop = "10px";
+        metricsEl.setAttribute("aria-label", "Execution metrics");
+        metricsEl.textContent = metricText;
+        el.appendChild(metricsEl);
+      }
+    }
   } catch (e) {
     renderTestCases(testCases);
     setOutput(e.message || "Execution failed", "error");
+  } finally {
+    _running = false;
   }
 }
 
 async function submitQuizCode() {
+  if (_running) return;
   const editor = document.getElementById("codeEditor");
   if (!editor) return;
   const code = editor.value;
@@ -2596,8 +3111,15 @@ async function submitQuizCode() {
     return;
   }
   showNotification("⏳ Running tests...", "info");
+  renderTestCases(testCases);
+  setOutput("", "running");
+  _running = true;
   try {
     const result = await executeCode(code, lang, problem);
+    if (!result.testResults || !Array.isArray(result.testResults)) {
+      showNotification("Execution returned no test results.", "error");
+      return;
+    }
     renderTestCases(testCases, result.testResults);
     if (result.allPassed) {
       if (!userProgress.submittedSolutions) userProgress.submittedSolutions = {};
@@ -2618,7 +3140,7 @@ async function submitQuizCode() {
       clearEditorDraft(submittedId);
       showNotification("Problem solved! +" + getXPForDifficulty(difficulty) + " XP", "success");
     } else {
-      const failures = result.testResults.filter(r => !r.passed);
+      const failures = result.testResults.filter(r => r && !r.passed);
       setOutput(failures.length + " / " + result.testResults.length + " tests failed. Fix the issues and try again.", "error");
       showNotification(failures.length + " test(s) failed. Keep trying!", "error");
     }
@@ -2626,6 +3148,8 @@ async function submitQuizCode() {
     renderTestCases(testCases);
     setOutput(e.message || "Execution failed", "error");
     showNotification("Execution error: " + (e.message || "Unknown error"), "error");
+  } finally {
+    _running = false;
   }
 }
 
@@ -2633,11 +3157,32 @@ function getXPForDifficulty(difficulty) { const map = { easy: 100, medium: 250, 
 
 function closeQuizEditor() { const el = document.getElementById("quizEditorModal"); if (el) el.classList.remove("active"); currentProblem = null; }
 
-function saveEditorDraft(problemId, code) { try { localStorage.setItem(`editorDraft_${problemId}`, code); } catch (e) { console.warn('Could not save draft:', e); } }
+function getProblemSignature(problem) {
+  return JSON.stringify({
+    fn: problem.functionName,
+    params: problem.params,
+    guide: problem.guide,
+    tc: problem.testCases
+  });
+}
+
+function saveEditorDraft(problemId, code, signature) {
+  try {
+    localStorage.setItem(`editorDraft_${problemId}`, code);
+    if (signature) localStorage.setItem(`editorDraft_sig_${problemId}`, signature);
+  } catch (e) { console.warn('Could not save draft:', e); }
+}
 
 function getEditorDraft(problemId) { try { return localStorage.getItem(`editorDraft_${problemId}`); } catch (e) { return null; } }
 
-function clearEditorDraft(problemId) { try { localStorage.removeItem(`editorDraft_${problemId}`); } catch (e) { console.warn('Could not clear draft:', e); } }
+function getEditorDraftSignature(problemId) { try { return localStorage.getItem(`editorDraft_sig_${problemId}`); } catch (e) { return null; } }
+
+function clearEditorDraft(problemId) {
+  try {
+    localStorage.removeItem(`editorDraft_${problemId}`);
+    localStorage.removeItem(`editorDraft_sig_${problemId}`);
+  } catch (e) { console.warn('Could not clear draft:', e); }
+}
 
 window.addEventListener("resize", () => {
   if (typeof updateLineNumbers === 'function') updateLineNumbers();
@@ -2996,7 +3541,7 @@ function highlightCpp(line) {
   return result.replace(regex, (m, comment, str, pre, kw, num) => {
     if (comment) return '<span class="token comment">' + comment + '</span>';
     if (str) return '<span class="token string">' + str + '</span>';
-    if (pre) return '<span class="token comment">' + pre + '</span>';
+    if (pre) return '<span class="token preprocessor">' + pre + '</span>';
     if (kw) return '<span class="token keyword keyword-' + (kwType[kw]||'flow') + '">' + kw + '</span>';
     if (num) return '<span class="token number">' + num + '</span>';
     return m;
@@ -3019,7 +3564,7 @@ function highlightC(line) {
   return result.replace(regex, (m, comment, str, pre, kw, num) => {
     if (comment) return '<span class="token comment">' + comment + '</span>';
     if (str) return '<span class="token string">' + str + '</span>';
-    if (pre) return '<span class="token comment">' + pre + '</span>';
+    if (pre) return '<span class="token preprocessor">' + pre + '</span>';
     if (kw) return '<span class="token keyword keyword-' + (kwType[kw]||'flow') + '">' + kw + '</span>';
     if (num) return '<span class="token number">' + num + '</span>';
     return m;
@@ -3071,7 +3616,7 @@ function initializeQuizEditor() {
   if (!editor || editor.dataset.initialized === 'true') return;
   editor.dataset.initialized = 'true';
   const syncEditorState = () => { updateSyntaxHighlight(); updateLineNumbers(); syncScroll(); };
-  editor.addEventListener('input', () => { syncEditorState(); if (currentProblem) saveEditorDraft(currentProblem.id, editor.value); });
+  editor.addEventListener('input', () => { syncEditorState(); if (currentProblem) saveEditorDraft(currentProblem.id, editor.value, getProblemSignature(currentProblem)); });
   editor.addEventListener('scroll', syncScroll);
   editor.addEventListener('keyup', updateCurrentLineHighlight);
   editor.addEventListener('click', updateCurrentLineHighlight);
@@ -3122,8 +3667,19 @@ window.addEventListener('hashchange', () => {
   const currentHash = window.location.hash || '#home';
   if (currentHash === '#home' || currentHash === '') {
     document.querySelectorAll('*').forEach(element => {
-      if (element.id?.toLowerCase().includes('quiz') || element.className?.toString().toLowerCase().includes('quiz') || element.id?.toLowerCase().includes('assistant')) element.style.display = 'none';
-      else if (element.classList.contains('hidden') && element.id !== 'loading-screen') { element.classList.remove('hidden'); element.style.display = ''; }
+      const id = element.id ? element.id.toLowerCase() : '';
+      const className = element.className ? element.className.toString().toLowerCase() : '';
+      if (id.includes('quiz') || className.includes('quiz') || id.includes('assistant')) {
+        element.style.display = 'none';
+      if (id.includes('quiz') || className.includes('quiz') || id.includes('assistant')) {
+        element.dataset.routeHidden = 'true';
+        element.style.display = 'none';
+      } else if (element.dataset.routeHidden === 'true') {
+        delete element.dataset.routeHidden;
+        element.classList.remove('hidden');
+        element.style.display = '';
+      }
+      }
     });
     if (typeof tQuiz !== 'undefined') tQuiz = null;
   }
@@ -3161,7 +3717,6 @@ async function runPerl() {
 }
 
 
-
 // Inject Report Issue Feature on educational pages
 document.addEventListener('DOMContentLoaded', () => {
   const path = window.location.pathname;
@@ -3172,3 +3727,528 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+
+// ===== KEYBOARD SHORTCUTS =====
+document.addEventListener('keydown', function(e) {
+    // Ctrl+K: Focus search
+    if (e.ctrlKey && e.key === 'k') {
+        e.preventDefault();
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) searchInput.focus();
+    }
+    
+    // Alt+H: Home
+    if (e.altKey && e.key === 'h') {
+        e.preventDefault();
+        window.location.href = '#home';
+    }
+    
+    // Alt+T: Topics
+    if (e.altKey && e.key === 't') {
+        e.preventDefault();
+        window.location.href = '#topics';
+    }
+    
+    // Alt+P: Practice
+    if (e.altKey && e.key === 'p') {
+        e.preventDefault();
+        window.location.href = '#practice';
+    }
+    
+    // Alt+Q: Quiz
+    if (e.altKey && e.key === 'q') {
+        e.preventDefault();
+        window.location.href = '#quiz';
+    }
+    
+    // Alt+D: Dashboard
+    if (e.altKey && e.key === 'd') {
+        e.preventDefault();
+        window.location.href = '#dashboard';
+    }
+    
+    // Escape: Close modal
+    if (e.key === 'Escape') {
+        closeShortcutModal();
+    }
+});
+
+// Open shortcut modal
+function openShortcutModal() {
+    const modal = document.getElementById('shortcutModal');
+    if (modal) modal.style.display = 'flex';
+}
+
+// Close shortcut modal
+function closeShortcutModal() {
+    const modal = document.getElementById('shortcutModal');
+    if (modal) modal.style.display = 'none';
+}
+
+// ==== CODE LANGUAGE BADGES ====
+function detectLanguage(code) {
+  const patterns = {
+        javascript: /function\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|=>|console\.log/,
+        python: /def\s+\w+\s*\(|import\s+\w+|print\(|if\s+__name__\s*==/,
+        java: /public\s+class|System\.out\.println|public\s+static\s+void\s+main/,
+        cpp: /#include\s*<.*>|using\s+namespace\s+std|std::/,
+        html: /<!DOCTYPE\s+html|<html|<body|<div\s+class/,
+        css: /{[\s\S]*;[\s\S]*}/,
+        sql: /SELECT.*FROM|INSERT\s+INTO|UPDATE.*SET|DELETE\s+FROM/,
+        php: /<\?php|\$[a-zA-Z_]/,
+        ruby: /def\s+\w+|end|puts\s+/,
+        go: /package\s+main|func\s+main\(\)|import\s*\(/,
+        rust: /fn\s+main\(\)|let\s+mut|println!/
+    };
+
+    for(const[lang,pattern] of Object.entries(patterns)) {
+      if(pattern.test(code)) return lang;
+    }
+    return 'text';
+    }
+
+    function addLanguageBadges(){
+      document.querySelectorAll('pre code').forEach(codcodeBlock => {
+        const code = codcodeBlock.textContent;
+        const lang = detectLanguage(code);
+        const pre = codcodeBlock.closest('pre');
+        const container = pre.closest('.code-block')|| pre.parentElement;
+        container.style.position='relative';
+        container.sty;e.background='#1a1e2f';
+        container.style.borderRadius = '8px';
+        container.style.overflow = 'hidden';
+        
+
+        const badge = document.createElement('span');
+        badge.className = `language-badge ${lang}`;
+        badge.textContent = lang;
+        container.appendChild(badge);
+      });
+    }
+    
+
+// ===== RECENT ACTIVITY FEED =====
+
+// Get activities from localStorage
+function getRecentActivity() {
+    const activities = JSON.parse(localStorage.getItem('recentActivities') || '[]');
+    return activities.slice(0, 10);
+}
+
+// Add a new activity
+function addActivity(type, text) {
+    const activities = JSON.parse(localStorage.getItem('recentActivities') || '[]');
+    activities.unshift({
+        type: type, // 'solved', 'quiz', 'badge'
+        text: text,
+        date: new Date().toISOString()
+    });
+    // Keep only last 50
+    if (activities.length > 50) {
+        activities.length = 50;
+    }
+    localStorage.setItem('recentActivities', JSON.stringify(activities));
+    renderActivityFeed();
+}
+
+// Render activity feed on dashboard
+function renderActivityFeed() {
+    const container = document.getElementById('recentActivityFeed');
+    if (!container) return;
+
+    const activities = getRecentActivity();
+
+    if (activities.length === 0) {
+        container.innerHTML = `<p style="color: #6b7280; font-size: 0.9rem;">No recent activity. Start solving problems!</p>`;
+        return;
+    }
+
+    const icons = {
+        solved: '✅',
+        quiz: '📝',
+        badge: '🏆'
+    };
+
+    container.innerHTML = activities.map(activity => `
+        <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+            <span style="font-size: 1.2rem;">${icons[activity.type] || '📌'}</span>
+            <span style="flex: 1; font-size: 0.9rem;">${activity.text}</span>
+            <span style="font-size: 0.7rem; color: #6b7280;">${timeAgo(activity.date)}</span>
+        </div>
+    `).join('');
+}
+
+// Time ago helper
+function timeAgo(date) {
+    const diff = Math.floor((new Date() - new Date(date)) / 1000);
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+}
+
+// Call this when user solves a problem
+function trackProblemSolved(problemName) {
+    addActivity('solved', `Solved ${problemName}`);
+}
+
+// Call this when user completes a quiz
+function trackQuizCompleted(topic) {
+    addActivity('quiz', `Completed ${topic} quiz`);
+}
+
+// Call this when user earns a badge
+function trackBadgeEarned(badgeName) {
+    addActivity('badge', `Earned ${badgeName} badge`);
+}
+
+    //Run on page load
+    document.addEventListener('DOMContentLoaded' , addLanguageBadges);
+// ============================================
+// REUSABLE ACCESSIBLE MODAL ARCHITECTURE
+// ============================================
+(function() {
+    function initModalManager() {
+        const activeModals = new Set();
+        
+        function isModalElement(el) {
+            if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+            const classes = el.className?.toString().toLowerCase() || "";
+            const id = el.id?.toLowerCase() || "";
+            return classes.includes('modal') || 
+                   id.includes('modal') || 
+                   el.getAttribute('role') === 'dialog' || 
+                   el.getAttribute('aria-modal') === 'true';
+        }
+        
+        function getFocusableElements(el) {
+            return el.querySelectorAll('a[href], area[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), iframe, object, embed, [tabindex="0"], [contenteditable]');
+        }
+
+        function setupModalAccessibility(modal) {
+            if (!modal.getAttribute('role')) {
+                modal.setAttribute('role', 'dialog');
+            }
+            modal.setAttribute('aria-modal', 'true');
+            
+            const header = modal.querySelector('h2, h3, h4, .modal-title, .quiz-modal-header h3');
+            if (header && !modal.getAttribute('aria-labelledby')) {
+                if (!header.id) {
+                    header.id = 'modal-title-' + Math.random().toString(36).substr(2, 9);
+                }
+                modal.setAttribute('aria-labelledby', header.id);
+            }
+        }
+
+        function trapFocus(e, modal) {
+            if (e.key !== 'Tab') return;
+            const focusable = Array.from(getFocusableElements(modal)).filter(el => el.tabIndex !== -1);
+            if (focusable.length === 0) return;
+            
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            
+            if (e.shiftKey) {
+                if (document.activeElement === first) {
+                    last.focus();
+                    e.preventDefault();
+                }
+            } else {
+                if (document.activeElement === last) {
+                    first.focus();
+                    e.preventDefault();
+                }
+            }
+        }
+
+        function handleModalOpen(modal) {
+            if (activeModals.has(modal)) return;
+            activeModals.add(modal);
+            
+            setupModalAccessibility(modal);
+            
+            const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+            document.documentElement.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
+            document.body.classList.add('modal-open');
+            
+            modal._trapFocusListener = (e) => trapFocus(e, modal);
+            modal.addEventListener('keydown', modal._trapFocusListener);
+            
+            const focusable = getFocusableElements(modal);
+            modal._previouslyFocused = document.activeElement;
+            if (focusable.length > 0) {
+                setTimeout(() => focusable[0].focus(), 50);
+            }
+            
+            if (!modal._overlayCloseBound) {
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        closeModal(modal);
+                    }
+                });
+                modal._overlayCloseBound = true;
+            }
+        }
+
+        function handleModalClose(modal) {
+            if (!activeModals.has(modal)) return;
+            activeModals.delete(modal);
+            
+            if (modal._trapFocusListener) {
+                modal.removeEventListener('keydown', modal._trapFocusListener);
+                modal._trapFocusListener = null;
+            }
+            
+            if (modal._previouslyFocused && modal._previouslyFocused.focus) {
+                modal._previouslyFocused.focus();
+                modal._previouslyFocused = null;
+            }
+            
+            if (activeModals.size === 0) {
+                document.body.classList.remove('modal-open');
+            }
+        }
+
+        function closeModal(modal) {
+            if (modal.classList.contains('active')) {
+                modal.classList.remove('active');
+            } else if (modal.style.display && modal.style.display !== 'none') {
+                modal.style.display = 'none';
+            } else if (modal.classList.contains('show')) {
+                modal.classList.remove('show');
+            } else if (!modal.classList.contains('hidden')) {
+                modal.classList.add('hidden');
+            }
+        }
+
+        function checkElement(element) {
+            if (!isModalElement(element)) return;
+            
+            const isVisible = element.classList.contains('active') || 
+                              element.classList.contains('show') || 
+                              element.style.display === 'flex' || 
+                              element.style.display === 'block' ||
+                              (element.style.display && element.style.display !== 'none' && !element.classList.contains('hidden')) ||
+                              (!element.classList.contains('hidden') && element.classList.contains('active')) ||
+                              (element.classList.contains('modal-overlay') && !element.classList.contains('hidden'));
+            
+            if (isVisible) {
+                handleModalOpen(element);
+            } else {
+                handleModalClose(element);
+            }
+        }
+
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'attributes') {
+                    checkElement(mutation.target);
+                } else if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach(node => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            if (isModalElement(node)) {
+                                checkElement(node);
+                            }
+                            node.querySelectorAll && node.querySelectorAll('.modal, .modal-overlay, [class*="modal"]').forEach(checkElement);
+                        }
+                    });
+                }
+            });
+        });
+
+        observer.observe(document.body, {
+            attributes: true,
+            childList: true,
+            subtree: true,
+            attributeFilter: ['class', 'style']
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                activeModals.forEach(modal => {
+                    closeModal(modal);
+                });
+            }
+        });
+
+        document.querySelectorAll('.modal, .modal-overlay, [class*="modal"]').forEach(checkElement);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initModalManager);
+    } else {
+        initModalManager();
+    }
+})();
+
+// ============================================
+// PROFILE EDITING & LANGUAGES MANAGER
+// ============================================
+(function() {
+    const PROFILE_AVATARS = ["🚀", "💻", "🧠", "🔥", "🦄", "⚡", "🤖", "🎨"];
+    let selectedProfileAvatar = "";
+
+    window.openProfileModal = function() {
+        const modal = document.getElementById("profileEditModal");
+        const nameInput = document.getElementById("profileNameInput");
+        
+        if (nameInput) nameInput.value = userProgress.name || "Learner";
+        selectedProfileAvatar = userProgress.avatar || "🚀";
+        
+        renderAvatarOptions();
+        
+        const userLangs = userProgress.languages || [];
+        const checkboxes = document.querySelectorAll(".lang-edit-checkbox");
+        checkboxes.forEach(cb => {
+            cb.checked = userLangs.includes(cb.value);
+        });
+        
+        if (modal) modal.classList.add("active");
+    };
+
+    window.closeProfileModal = function() {
+        const modal = document.getElementById("profileEditModal");
+        if (modal) modal.classList.remove("active");
+    };
+
+    window.selectProfileAvatar = function(av) {
+        selectedProfileAvatar = av;
+        renderAvatarOptions();
+    };
+
+    function renderAvatarOptions() {
+        const avatarOpts = document.getElementById("avatarOptions");
+        if (!avatarOpts) return;
+        avatarOpts.innerHTML = PROFILE_AVATARS.map(av => `
+            <span class="avatar-option ${selectedProfileAvatar === av ? 'selected' : ''}" 
+                  onclick="selectProfileAvatar('${av}')" 
+                  style="cursor: pointer; font-size: 2rem; padding: 0.25rem 0.5rem; border-radius: 8px; border: 2px solid ${selectedProfileAvatar === av ? 'var(--primary)' : 'transparent'}; transition: all 0.2s; display: inline-block;">
+                ${av}
+            </span>
+        `).join("");
+    }
+
+    window.saveProfileChanges = function() {
+        const nameInput = document.getElementById("profileNameInput");
+        const nameVal = nameInput ? nameInput.value.trim() : "";
+        
+        if (!nameVal) {
+            alert("Please enter a valid display name.");
+            return;
+        }
+        
+        const userLangs = [];
+        const checkboxes = document.querySelectorAll(".lang-edit-checkbox");
+        checkboxes.forEach(cb => {
+            if (cb.checked) userLangs.push(cb.value);
+        });
+        
+        userProgress.name = nameVal;
+        userProgress.avatar = selectedProfileAvatar;
+        userProgress.languages = userLangs;
+        
+        if (typeof saveUserData === 'function') {
+            saveUserData();
+        } else {
+            localStorage.setItem("algoInfinityVerse", JSON.stringify(userProgress));
+        }
+        
+        updateProfileViews();
+        window.closeProfileModal();
+        
+        if (typeof showNotification === 'function') {
+            showNotification("Profile updated successfully!", "success");
+        }
+    };
+
+    window.renderLanguageChips = function() {
+        if (typeof userProgress === 'undefined') return;
+        const userLangs = userProgress.languages || [];
+        const containers = [
+            document.getElementById("profileLanguagesSection"),
+            document.getElementById("profileLanguages")
+        ];
+        
+        const colors = {
+            "C++": "#f34b7d",
+            "Java": "#b07219",
+            "Python": "#3572A5",
+            "JavaScript": "#f1e05a",
+            "Rust": "#dea584"
+        };
+
+        const textColors = {
+            "JavaScript": "#000000"
+        };
+        
+        containers.forEach(container => {
+            if (!container) return;
+            if (userLangs.length === 0) {
+                container.innerHTML = `<span style="color: var(--text-secondary); font-size: 0.9rem; font-style: italic;">No languages added yet. Click edit to add!</span>`;
+                return;
+            }
+            
+            container.innerHTML = userLangs.map(lang => {
+                const bg = colors[lang] || "var(--primary)";
+                const color = textColors[lang] || "#ffffff";
+                return `
+                    <span class="lang-chip" style="
+                        display: inline-flex;
+                        align-items: center;
+                        background: ${bg};
+                        color: ${color};
+                        font-size: 0.8rem;
+                        font-weight: 600;
+                        padding: 0.3rem 0.8rem;
+                        border-radius: 20px;
+                        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                        text-transform: uppercase;
+                        letter-spacing: 0.5px;
+                    ">${lang}</span>
+                `;
+            }).join("");
+        });
+    };
+
+    function updateProfileViews() {
+        const profileName = document.getElementById("profileName");
+        if (profileName) profileName.textContent = userProgress.name;
+        const profileSectionName = document.getElementById("profileSectionName");
+        if (profileSectionName) profileSectionName.textContent = userProgress.name;
+        
+        const userNameEl = document.getElementById("userName");
+        if (userNameEl) userNameEl.textContent = userProgress.name;
+        const cardUserName = document.getElementById("cardUserName");
+        if (cardUserName) cardUserName.textContent = userProgress.name;
+        
+        document.querySelectorAll(".avatar-icon").forEach(el => el.textContent = userProgress.avatar || "🚀");
+        const cardAvatar = document.getElementById("cardAvatar");
+        if (cardAvatar) cardAvatar.textContent = userProgress.avatar || "🚀";
+        
+        if (typeof initIdentityCard === 'function') {
+            initIdentityCard();
+        }
+        
+        window.renderLanguageChips();
+    }
+
+    function setupProfileListeners() {
+        const mainEditBtn = document.getElementById("profileSectionEditBtn");
+        if (mainEditBtn) mainEditBtn.onclick = window.openProfileModal;
+        const pageEditBtn = document.getElementById("profilePageEditBtn");
+        if (pageEditBtn) pageEditBtn.onclick = window.openProfileModal;
+        
+        const closeCrossBtn = document.getElementById("profileModalClose");
+        if (closeCrossBtn) closeCrossBtn.onclick = window.closeProfileModal;
+        
+        window.renderLanguageChips();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupProfileListeners);
+    } else {
+        setupProfileListeners();
+    }
+    
+    setTimeout(setupProfileListeners, 200);
+})();

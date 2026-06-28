@@ -134,6 +134,282 @@
         min-height:40vh;
       }
     }
+
+    /* ── Coding Motivation Dashboard ─────────────────────────────────────── */
+    .motivation-dashboard {
+      background: linear-gradient(135deg, rgba(139,92,246,0.12) 0%, rgba(59,130,246,0.08) 100%);
+      border: 1px solid rgba(139,92,246,0.25);
+      border-radius: 24px;
+      padding: 2.5rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .motivation-dashboard::before {
+      content: '';
+      position: absolute;
+      top: -60px; right: -60px;
+      width: 200px; height: 200px;
+      background: radial-gradient(circle, rgba(139,92,246,0.18) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    /* Daily Quote Card */
+    .quote-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(139,92,246,0.3);
+      border-radius: 18px;
+      padding: 2rem 2.5rem;
+      margin-bottom: 2rem;
+      position: relative;
+      text-align: center;
+      min-height: 130px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .quote-icon {
+      font-size: 2rem;
+      margin-bottom: .75rem;
+      filter: drop-shadow(0 0 8px rgba(139,92,246,0.6));
+    }
+
+    .quote-text {
+      font-size: 1.15rem;
+      font-style: italic;
+      line-height: 1.7;
+      color: rgba(255,255,255,0.9);
+      margin-bottom: .75rem;
+      transition: opacity .4s;
+    }
+
+    .quote-author {
+      font-size: .85rem;
+      color: #a78bfa;
+      font-weight: 600;
+      letter-spacing: .05em;
+    }
+
+    .quote-badge {
+      position: absolute;
+      top: 1rem; right: 1rem;
+      background: linear-gradient(135deg,#7c3aed,#2563eb);
+      color: #fff;
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .06em;
+      padding: .25rem .65rem;
+      border-radius: 20px;
+      text-transform: uppercase;
+    }
+
+    /* Randomise button */
+    .btn-randomise {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+      color: #fff;
+      border: none;
+      border-radius: 50px;
+      padding: .65rem 1.5rem;
+      font-size: .9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform .2s, box-shadow .2s;
+      box-shadow: 0 4px 20px rgba(124,58,237,0.4);
+    }
+
+    .btn-randomise:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 28px rgba(124,58,237,0.55);
+    }
+
+    .btn-randomise i { font-size: 1rem; }
+
+    /* Stories Carousel */
+    .stories-carousel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+
+    .story-nav-btns {
+      display: flex;
+      gap: .5rem;
+    }
+
+    .story-arrow {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 1px solid rgba(139,92,246,0.4);
+      background: rgba(139,92,246,0.1);
+      color: #a78bfa;
+      font-size: .95rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background .2s, transform .2s, box-shadow .2s;
+      flex-shrink: 0;
+    }
+
+    .story-arrow:hover {
+      background: rgba(139,92,246,0.35);
+      transform: scale(1.1);
+      box-shadow: 0 0 14px rgba(139,92,246,0.45);
+    }
+
+    .story-arrow:active { transform: scale(0.92); }
+
+    /* Horizontal scroll track */
+    .stories-carousel-wrap {
+      overflow: hidden;
+      width: 100%;
+    }
+
+    .stories-carousel-track {
+      display: flex;
+      gap: 1.25rem;
+      /* smooth CSS transition for manual arrow scroll */
+      transition: transform .5s cubic-bezier(.25,.8,.25,1);
+      will-change: transform;
+    }
+
+    /* Each card fixed width inside the carousel */
+    .stories-carousel-track .story-card {
+      flex: 0 0 280px;
+      min-width: 280px;
+    }
+
+    @media (max-width: 600px) {
+      .stories-carousel-track .story-card { flex: 0 0 240px; min-width: 240px; }
+    }
+
+
+    /* Progress bar for daily streak */
+    .streak-bar-wrap {
+      margin-top: 1.5rem;
+      text-align: center;
+    }
+
+    .streak-label {
+      font-size: .82rem;
+      color: rgba(255,255,255,0.55);
+      margin-bottom: .4rem;
+    }
+
+    .streak-bar {
+      height: 6px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+    }
+
+    .streak-fill {
+      height: 100%;
+      border-radius: 10px;
+      background: linear-gradient(90deg, #7c3aed, #06b6d4);
+      animation: streak-glow 2s ease-in-out infinite alternate;
+    }
+
+    @keyframes streak-glow {
+      from { box-shadow: 0 0 6px #7c3aed; }
+      to   { box-shadow: 0 0 18px #06b6d4; }
+    }
+
+    /* Success Stories */
+    .stories-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1.5rem;
+    }
+
+    .story-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 1.5rem;
+      transition: transform .3s, border-color .3s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .story-card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(139,92,246,0.06), transparent);
+      opacity: 0;
+      transition: opacity .3s;
+    }
+
+    .story-card:hover { transform: translateY(-6px); border-color: rgba(139,92,246,0.4); }
+    .story-card:hover::after { opacity: 1; }
+
+    .story-avatar {
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem;
+      margin-bottom: 1rem;
+    }
+
+    .story-name {
+      font-weight: 700;
+      font-size: 1rem;
+      margin-bottom: .2rem;
+    }
+
+    .story-role {
+      font-size: .78rem;
+      color: #a78bfa;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-bottom: .75rem;
+    }
+
+    .story-text {
+      font-size: .88rem;
+      color: rgba(255,255,255,0.7);
+      line-height: 1.65;
+    }
+
+    .story-company {
+      margin-top: .85rem;
+      font-size: .78rem;
+      color: rgba(255,255,255,0.4);
+    }
+
+    .story-company strong { color: rgba(255,255,255,0.7); }
+
+    .dash-divider {
+      border: none;
+      border-top: 1px solid rgba(255,255,255,0.07);
+      margin: 2rem 0;
+    }
+
+    .dash-subtitle {
+      font-size: 1rem;
+      font-weight: 700;
+      color: rgba(255,255,255,0.75);
+      margin-bottom: 0;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+
+    @media (max-width: 600px) {
+      .motivation-dashboard { padding: 1.5rem; }
+      .quote-text { font-size: 1rem; }
+    }
   </style>
 
     <!-- Theme Initialization Script -->
@@ -367,6 +643,62 @@
   </div>
 </section>
 
+<!-- CODING MOTIVATION DASHBOARD -->
+<section class="section" id="motivation-dashboard">
+  <div class="container">
+
+    <h2 class="section-title">💡 Coding Motivation Dashboard</h2>
+
+    <div class="motivation-dashboard">
+
+      <!-- Daily Quote (no arrows, just the card + Random button) -->
+      <div class="quote-card" id="quoteCard">
+        <span class="quote-badge">✨ Daily Boost</span>
+        <div class="quote-icon" id="quoteIcon">🧠</div>
+        <p class="quote-text" id="quoteText">Loading your quote…</p>
+        <p class="quote-author" id="quoteAuthor"></p>
+      </div>
+
+      <div style="text-align:center; margin-top:1rem;">
+        <button class="btn-randomise" id="newQuoteBtn">
+          <i class="fas fa-shuffle"></i> Random
+        </button>
+      </div>
+
+      <div class="streak-bar-wrap">
+        <p class="streak-label">Today's Motivation Level</p>
+        <div class="streak-bar">
+          <div class="streak-fill" id="streakFill" style="width:70%"></div>
+        </div>
+      </div>
+
+      <hr class="dash-divider">
+
+      <!-- Success Stories Carousel -->
+      <div class="stories-carousel-header">
+        <p class="dash-subtitle">🏆 Success Stories</p>
+        <div class="story-nav-btns">
+          <button class="story-arrow" id="storyPrevBtn" aria-label="Previous story">
+            <i class="fas fa-chevron-left"></i>
+          </button>
+          <button class="story-arrow" id="storyNextBtn" aria-label="Next story">
+            <i class="fas fa-chevron-right"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="stories-carousel-wrap">
+        <div class="stories-carousel-track" id="storiesTrack">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+
+    </div>
+
+  </div>
+</section>
+
 <!-- CONTACT -->
 <section class="section">
   <div class="container">
@@ -411,5 +743,200 @@
     loadPartial('navbar-placeholder', '/partials/navbar.html');
     loadPartial('footer-placeholder', '/partials/footer.html');
   </script>
+
+  <!-- ── Coding Motivation Dashboard Script ── -->
+  <script>
+  (() => {
+    /* ─── Quotes (30) ─────────────────────────────────────────────── */
+    const QUOTES = [
+      { icon:"🧠", text:"Every expert was once a beginner. Keep going.", author:"Helen Hayes" },
+      { icon:"🚀", text:"The only way to do great work is to love what you do.", author:"Steve Jobs" },
+      { icon:"💡", text:"First, solve the problem. Then, write the code.", author:"John Johnson" },
+      { icon:"😄", text:"Code is like humor. When you have to explain it, it's bad.", author:"Cory House" },
+      { icon:"🔍", text:"Programming isn't about what you know; it's about what you can figure out.", author:"Chris Pine" },
+      { icon:"⏳", text:"The best time to start was yesterday. The second best time is now.", author:"Anonymous" },
+      { icon:"🐛", text:"It's not a bug — it's an undocumented feature.", author:"Anonymous" },
+      { icon:"🌱", text:"One algorithm at a time. You're making progress every day.", author:"AIV Community" },
+      { icon:"🔧", text:"Debugging is twice as hard as writing code. So write clever code and you'll be stuck forever.", author:"Brian Kernighan" },
+      { icon:"💬", text:"Talk is cheap. Show me the code.", author:"Linus Torvalds" },
+      { icon:"📖", text:"Any fool can write code that a computer can understand. Good programmers write code that humans can understand.", author:"Martin Fowler" },
+      { icon:"🎨", text:"Software is a great combination of artistry and engineering.", author:"Bill Gates" },
+      { icon:"✨", text:"The function of good software is to make the complex appear simple.", author:"Grady Booch" },
+      { icon:"⚡", text:"Simplicity is the soul of efficiency.", author:"Austin Freeman" },
+      { icon:"🏆", text:"Keep pushing. Every line of code is a step closer to your dream job.", author:"AIV Community" },
+      { icon:"🎯", text:"In order to be irreplaceable, one must always be different.", author:"Coco Chanel" },
+      { icon:"🔥", text:"If you think you can do a thing or think you can't do a thing, you're right.", author:"Henry Ford" },
+      { icon:"🌟", text:"The secret of getting ahead is getting started.", author:"Mark Twain" },
+      { icon:"💪", text:"Believe you can and you're halfway there.", author:"Theodore Roosevelt" },
+      { icon:"🎓", text:"An investment in knowledge pays the best interest.", author:"Benjamin Franklin" },
+      { icon:"🛠️", text:"It always seems impossible until it's done.", author:"Nelson Mandela" },
+      { icon:"📊", text:"Without data, you're just another person with an opinion.", author:"W. Edwards Deming" },
+      { icon:"🌍", text:"The computer was born to solve problems that did not exist before.", author:"Bill Gates" },
+      { icon:"⚙️", text:"Make it work, make it right, make it fast.", author:"Kent Beck" },
+      { icon:"🎪", text:"Measuring programming progress by lines of code is like measuring aircraft building progress by weight.", author:"Bill Gates" },
+      { icon:"🦾", text:"The only real mistake is the one from which we learn nothing.", author:"Henry Ford" },
+      { icon:"🌊", text:"Don't watch the clock; do what it does. Keep going.", author:"Sam Levenson" },
+      { icon:"💎", text:"Quality is not an act, it is a habit.", author:"Aristotle" },
+      { icon:"🔑", text:"Hard work beats talent when talent doesn't work hard.", author:"Tim Notke" },
+      { icon:"🎵", text:"Strive not to be a success, but rather to be of value.", author:"Albert Einstein" },
+    ];
+
+    /* ─── Success Stories (8) ──────────────────────────────────────── */
+    const STORIES = [
+      { emoji:"👨‍💻", name:"Arjun Mehta",   role:"Software Engineer",     text:"After 3 months on Algo Infinity Verse, I cracked my Google interview. The DSA roadmap and practice problems were exactly what I needed.",               company:"Now at",        place:"Google" },
+      { emoji:"👩‍💻", name:"Priya Sharma",  role:"Backend Developer",     text:"I went from zero to landing a role at a fintech startup. The spaced-repetition memory scanner helped me retain concepts I used to forget.",              company:"Now at",        place:"Razorpay" },
+      { emoji:"🧑‍🎓", name:"Carlos Rivera", role:"CS Student → SDE",      text:"The algorithm visualizers made graph problems click for me. Got my first full-time offer before graduation!",                                              company:"Now at",        place:"Microsoft" },
+      { emoji:"👩‍🔬", name:"Aisha Patel",   role:"Data Engineer",         text:"I used AIV every day for 60 days straight. The spaced-repetition on trees and graphs transformed my weak spots into strengths.",                          company:"Now at",        place:"Amazon" },
+      { emoji:"🧑‍💼", name:"Luca Ferretti", role:"Full Stack Developer",  text:"The system design section gave me the confidence to ace my Meta interview loop. Landed a senior role I didn't think I was ready for.",                    company:"Now at",        place:"Meta" },
+      { emoji:"👨‍🏫", name:"Ryo Tanaka",    role:"Competitive Programmer", text:"I reached Specialist on Codeforces after working through the DP and Graph sections. AIV's step-by-step explanations are unmatched.",                   company:"Ranked in",     place:"Top 5% on Codeforces" },
+      { emoji:"👩‍💻", name:"Sofia Morales", role:"Mobile Engineer",       text:"Switched from design to engineering at 27. AIV's structured roadmap made the transition far less scary than I expected.",                                 company:"Now at",        place:"Spotify" },
+      { emoji:"🧑‍🚀", name:"Dev Kapoor",    role:"Open Source Contributor",text:"Started as a user, ended up contributing features back! The community and codebase quality inspired me to level up my own skills.",                      company:"Contributing to",place:"AIV Open Source" },
+    ];
+
+    /* ════════════════════════════════════════════════════════════════
+       QUOTE – simple fade, no arrows / dots
+    ════════════════════════════════════════════════════════════════ */
+    const quoteText   = document.getElementById('quoteText');
+    const quoteAuthor = document.getElementById('quoteAuthor');
+    const quoteIcon   = document.getElementById('quoteIcon');
+    const newQuoteBtn = document.getElementById('newQuoteBtn');
+    const streakFill  = document.getElementById('streakFill');
+
+    const TODAY_KEY = 'aiv_daily_quote_' + new Date().toDateString();
+    let currentQuoteIdx;
+
+    const stored = localStorage.getItem(TODAY_KEY);
+    if (stored !== null) {
+      currentQuoteIdx = Number(stored) % QUOTES.length;
+    } else {
+      const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+      currentQuoteIdx = dayOfYear % QUOTES.length;
+    }
+
+    function showQuote(q, animate) {
+      if (animate) {
+        [quoteText, quoteAuthor, quoteIcon].forEach(el => el.style.opacity = '0');
+        setTimeout(() => {
+          quoteIcon.textContent   = q.icon;
+          quoteText.textContent   = `"${q.text}"`;
+          quoteAuthor.textContent = `— ${q.author}`;
+          [quoteText, quoteAuthor, quoteIcon].forEach(el => el.style.opacity = '1');
+        }, 280);
+      } else {
+        quoteIcon.textContent   = q.icon;
+        quoteText.textContent   = `"${q.text}"`;
+        quoteAuthor.textContent = `— ${q.author}`;
+      }
+      localStorage.setItem(TODAY_KEY, currentQuoteIdx);
+    }
+
+    showQuote(QUOTES[currentQuoteIdx], false);
+
+    newQuoteBtn.addEventListener('click', () => {
+      let rnd;
+      do { rnd = Math.floor(Math.random() * QUOTES.length); } while (rnd === currentQuoteIdx);
+      currentQuoteIdx = rnd;
+      showQuote(QUOTES[currentQuoteIdx], true);
+      const level = 55 + Math.floor(Math.random() * 45);
+      streakFill.style.transition = 'width .6s ease';
+      streakFill.style.width = level + '%';
+    });
+
+    /* ════════════════════════════════════════════════════════════════
+       STORIES CAROUSEL – horizontal, auto-slides left every 3 s
+    ════════════════════════════════════════════════════════════════ */
+    const track     = document.getElementById('storiesTrack');
+    const prevBtn   = document.getElementById('storyPrevBtn');
+    const nextBtn   = document.getElementById('storyNextBtn');
+    const CARD_GAP  = 20;  // px — matches CSS gap (1.25rem ≈ 20px)
+
+    // Render cards (random order, duplicated for seamless loop)
+    const shuffled = [...STORIES].sort(() => Math.random() - 0.5);
+    const allItems = [...shuffled, ...shuffled];   // double for infinite effect
+    allItems.forEach(s => {
+      const card = document.createElement('div');
+      card.className = 'story-card';
+      card.innerHTML = `
+        <div class="story-avatar">${s.emoji}</div>
+        <p class="story-name">${s.name}</p>
+        <p class="story-role">${s.role}</p>
+        <p class="story-text">"${s.text}"</p>
+        <p class="story-company">${s.company} <strong>${s.place}</strong></p>
+      `;
+      track.appendChild(card);
+    });
+
+    // Calculate card width after a frame (layout must be done)
+    let cardWidth = 0;
+    let currentOffset = 0;
+    let autoTimer = null;
+
+    function getCardWidth() {
+      const firstCard = track.querySelector('.story-card');
+      return firstCard ? firstCard.offsetWidth + CARD_GAP : 300;
+    }
+
+    function slideTo(offset, instant = false) {
+      if (instant) {
+        track.style.transition = 'none';
+      } else {
+        track.style.transition = 'transform .5s cubic-bezier(.25,.8,.25,1)';
+      }
+      track.style.transform = `translateX(${-offset}px)`;
+      currentOffset = offset;
+    }
+
+    function clampOffset() {
+      cardWidth = getCardWidth();
+      const halfLen = shuffled.length * cardWidth;
+      // If we've scrolled past the first copy, reset silently to same position in second copy
+      if (currentOffset >= halfLen) {
+        slideTo(currentOffset - halfLen, true);
+      } else if (currentOffset < 0) {
+        slideTo(currentOffset + halfLen, true);
+      }
+    }
+
+    function slideNext() {
+      cardWidth = getCardWidth();
+      currentOffset += cardWidth;
+      clampOffset();
+      slideTo(currentOffset);
+    }
+
+    function slidePrev() {
+      cardWidth = getCardWidth();
+      currentOffset -= cardWidth;
+      clampOffset();
+      slideTo(currentOffset);
+    }
+
+    function startAuto() {
+      stopAuto();
+      autoTimer = setInterval(slideNext, 3000);
+    }
+
+    function stopAuto() {
+      if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    }
+
+    // Init on next frame so card dimensions are ready
+    requestAnimationFrame(() => {
+      slideTo(0, true);
+      startAuto();
+    });
+
+    nextBtn.addEventListener('click', () => { slideNext(); stopAuto(); startAuto(); });
+    prevBtn.addEventListener('click', () => { slidePrev(); stopAuto(); startAuto(); });
+
+    // Pause auto on hover
+    track.parentElement.addEventListener('mouseenter', stopAuto);
+    track.parentElement.addEventListener('mouseleave', startAuto);
+
+    /* ─── Motivation bar ──────────────────────────────────────────── */
+    streakFill.style.width = (55 + Math.floor(Math.random() * 45)) + '%';
+  })();
+  </script>
 </body>
 </html>
+

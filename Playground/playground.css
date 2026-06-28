@@ -5059,6 +5059,9 @@ html.light-mode {
 .syntax-highlight .token.string {
     color: #c3e88d;
 }
+.syntax-highlight .token.preprocessor {
+    color: #a27dea;
+}
 
 .syntax-highlight .token.number {
     color: #f78c6c;
